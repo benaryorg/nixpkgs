@@ -122,6 +122,8 @@ in
           export SYNCPLAY_PASSWORD=$(cat "''${CREDENTIALS_DIRECTORY}/password")
         ''}
         ${lib.optionalString (cfg.saltFile != null) ''
+          ls -shal "''${CREDENTIALS_DIRECTORY}/" || true
+          ls -dshal "''${CREDENTIALS_DIRECTORY}/" || true
           export SYNCPLAY_SALT=$(cat "''${CREDENTIALS_DIRECTORY}/salt")
         ''}
         exec ${pkgs.syncplay-nogui}/bin/syncplay-server ${escapeShellArgs cmdArgs}

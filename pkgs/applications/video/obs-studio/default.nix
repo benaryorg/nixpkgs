@@ -35,7 +35,7 @@
 , alsa-lib
 , pulseaudioSupport ? config.pulseaudio or stdenv.hostPlatform.isLinux
 , libpulseaudio
-, libcef
+, enableBrowser ? true, libcef
 , pciutils
 , pipewireSupport ? stdenv.hostPlatform.isLinux
 , withFdk ? true
@@ -117,7 +117,6 @@ stdenv.mkDerivation (finalAttrs: {
     curl
     ffmpeg
     jansson
-    libcef
     libjack2
     libv4l
     libxkbcommon
@@ -148,10 +147,11 @@ stdenv.mkDerivation (finalAttrs: {
   ++ optional alsaSupport alsa-lib
   ++ optional pulseaudioSupport libpulseaudio
   ++ optionals pipewireSupport [ pipewire libdrm ]
-  ++ optional withFdk fdk_aac;
+  ++ optional withFdk fdk_aac
+  ++ optional enableBrowser libcef;
 
   # Copied from the obs-linuxbrowser
-  postUnpack = ''
+  postUnpack = lib.optionalString enableBrowser ''
     mkdir -p cef/Release cef/Resources cef/libcef_dll_wrapper/
     for i in ${libcef}/share/cef/*; do
       ln -s $i cef/Release/
@@ -165,9 +165,6 @@ stdenv.mkDerivation (finalAttrs: {
   cmakeFlags = [
     "-DOBS_VERSION_OVERRIDE=${finalAttrs.version}"
     "-Wno-dev" # kill dev warnings that are useless for packaging
-    # Add support for browser source
-    "-DBUILD_BROWSER=ON"
-    "-DCEF_ROOT_DIR=../../cef"
     "-DENABLE_JACK=ON"
     (lib.cmakeBool "ENABLE_QSV11" stdenv.hostPlatform.isx86_64)
     (lib.cmakeBool "ENABLE_LIBFDK" withFdk)
@@ -175,7 +172,9 @@ stdenv.mkDerivation (finalAttrs: {
     (lib.cmakeBool "ENABLE_PULSEAUDIO" pulseaudioSupport)
     (lib.cmakeBool "ENABLE_PIPEWIRE" pipewireSupport)
     (lib.cmakeBool "ENABLE_AJA" false) # TODO: fix linking against libajantv2
-  ];
+    (lib.cmakeBool "ENABLE_BROWSER" enableBrowser)
+  ]
+  ++ optional enableBrowser "-DCEF_ROOT_DIR=../../cef";
 
   env.NIX_CFLAGS_COMPILE = toString [
     "-Wno-error=deprecated-declarations"
@@ -193,8 +192,10 @@ stdenv.mkDerivation (finalAttrs: {
       blackmagic-desktop-video
     ];
   in ''
-    # Remove libcef before patchelf, otherwise it will fail
-    rm $out/lib/obs-plugins/libcef.so
+    ${lib.optionalString enableBrowser ''
+      # Remove libcef before patchelf, otherwise it will fail
+      rm $out/lib/obs-plugins/libcef.so
+    ''}
 
     qtWrapperArgs+=(
       --prefix LD_LIBRARY_PATH : "$out/lib:${lib.makeLibraryPath wrapperLibraries}"
@@ -206,8 +207,10 @@ stdenv.mkDerivation (finalAttrs: {
     addDriverRunpath $out/lib/lib*.so
     addDriverRunpath $out/lib/obs-plugins/*.so
 
-    # Link libcef again after patchelfing other libs
-    ln -s ${libcef}/lib/* $out/lib/obs-plugins/
+    ${lib.optionalString enableBrowser ''
+      # Link libcef again after patchelfing other libs
+      ln -s ${libcef}/lib/* $out/lib/obs-plugins/
+    ''}
   '';
 
   passthru.updateScript = nix-update-script { };

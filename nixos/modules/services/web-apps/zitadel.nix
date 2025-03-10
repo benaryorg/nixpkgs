@@ -2,6 +2,7 @@
   config,
   pkgs,
   lib,
+  utils,
   ...
 }:
 
@@ -207,7 +208,7 @@ in
         configFile = settingsFormat.generate "config.yaml" cfg.settings;
         stepsFile = settingsFormat.generate "steps.yaml" cfg.steps;
 
-        args = lib.cli.toGNUCommandLineShell { } {
+        args = lib.cli.toGNUCommandLine { } {
           config = cfg.extraSettingsPaths ++ [ configFile ];
           steps = cfg.extraStepsPaths ++ [ stepsFile ];
           masterkeyFile = cfg.masterKeyFile;
@@ -219,11 +220,8 @@ in
         path = [ cfg.package ];
         wantedBy = [ "multi-user.target" ];
 
-        script = ''
-          zitadel start-from-init ${args}
-        '';
-
         serviceConfig = {
+          ExecStart = utils.escapeSystemdExecArgs ([ "zitadel" "start-from-init" ] ++ args);
           Type = "simple";
           User = cfg.user;
           Group = cfg.group;

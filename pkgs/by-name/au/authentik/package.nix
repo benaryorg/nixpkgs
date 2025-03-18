@@ -15,6 +15,8 @@
   typescript,
   makeSetupHook,
   writeShellScript,
+  applyPatches,
+  fetchurl,
 }:
 
 let
@@ -22,11 +24,23 @@ let
 
   version = "2025.12.5";
 
-  src = fetchFromGitHub {
+  ghSrc = fetchFromGitHub {
     owner = "goauthentik";
     repo = "authentik";
     tag = "version/${version}";
     hash = "sha256-LPGAhbtmuztDQ4CVhUXb+vBU5HjvNZ7JicI5r3lr1QQ=";
+  };
+
+  # needed to inject patches into the srcs which will be used with `sourceRoot`
+  src = applyPatches {
+    src = ghSrc;
+    patches = [
+      # custom s3 url fix
+      (fetchurl {
+        url = "https://github.com/goauthentik/authentik/pull/21704.patch?full_index=1";
+        hash = "sha256-xSIV42K+682J55210nifvldYV6PQJsbruwQMJjkNVgY=";
+      })
+    ];
   };
 
   meta = {

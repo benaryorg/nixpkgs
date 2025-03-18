@@ -1,0 +1,3191 @@
+From 79db485c8c23e42c4ae94e9816c5ec99dbf61cca Mon Sep 17 00:00:00 2001
+From: Marc 'risson' Schmitt <marc.schmitt@risson.space>
+Date: Fri, 14 Mar 2025 17:14:24 +0100
+Subject: [PATCH 1/3] core: bump django-tenants (#13536)
+
+Signed-off-by: Marc 'risson' Schmitt <marc.schmitt@risson.space>
+---
+ poetry.lock | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/poetry.lock b/poetry.lock
+index abc260ec19..09dbe006d8 100644
+--- a/poetry.lock
++++ b/poetry.lock
+@@ -1552,7 +1552,7 @@ Django = ">=2.1,<5.1"
+ type = "git"
+ url = "https://github.com/rissson/django-tenants.git"
+ reference = "authentik-fixes"
+-resolved_reference = "a7f37c53f62f355a00142473ff1e3451bb794eca"
++resolved_reference = "156e53a6f5902d74b73dd9d0192fffaa2587a740"
+ 
+ [[package]]
+ name = "djangorestframework"
+-- 
+2.47.2
+
+
+From 0ab0c96aa2d1361e3a5f6da610f9d5b31623db81 Mon Sep 17 00:00:00 2001
+From: Dominic R <dominic@sdko.org>
+Date: Fri, 14 Mar 2025 13:39:09 -0400
+Subject: [PATCH 2/3] sources: prevent deletion of built-in source (#12914)
+
+* web: sources: disable "delete" button for built-in source
+
+* poetry doesn't like that I use python 3.13 / implement check on backend too
+
+* fix ruff i think
+
+Signed-off-by: Dominic R <git@sdko.org>
+
+* nvm
+
+Signed-off-by: Dominic R <git@sdko.org>
+
+* reformat
+
+* check by managed attribute
+
+Signed-off-by: Jens Langhammer <jens@goauthentik.io>
+
+* like this?
+
+---------
+
+Signed-off-by: Dominic R <git@sdko.org>
+Signed-off-by: Jens Langhammer <jens@goauthentik.io>
+Co-authored-by: Dominic R <git@sdko.org>
+Co-authored-by: Jens Langhammer <jens@goauthentik.io>
+---
+ authentik/core/api/sources.py           | 12 ++++++++++++
+ authentik/core/apps.py                  |  2 +-
+ authentik/core/models.py                |  2 ++
+ web/src/admin/sources/SourceListPage.ts |  7 +++++--
+ 4 files changed, 20 insertions(+), 3 deletions(-)
+
+diff --git a/authentik/core/api/sources.py b/authentik/core/api/sources.py
+index c1ccd44672..0a6298e597 100644
+--- a/authentik/core/api/sources.py
++++ b/authentik/core/api/sources.py
+@@ -6,6 +6,7 @@ from django_filters.rest_framework import DjangoFilterBackend
+ from drf_spectacular.utils import OpenApiResponse, extend_schema
+ from rest_framework import mixins
+ from rest_framework.decorators import action
++from rest_framework.exceptions import ValidationError
+ from rest_framework.fields import CharField, ReadOnlyField, SerializerMethodField
+ from rest_framework.filters import OrderingFilter, SearchFilter
+ from rest_framework.parsers import MultiPartParser
+@@ -157,6 +158,17 @@ class SourceViewSet(
+             matching_sources.append(source_settings.validated_data)
+         return Response(matching_sources)
+ 
++    def destroy(self, request: Request, *args, **kwargs):
++        """Prevent deletion of built-in sources"""
++        instance: Source = self.get_object()
++
++        if instance.managed == Source.MANAGED_INBUILT:
++            raise ValidationError(
++                {"detail": "Built-in sources cannot be deleted"}, code="protected"
++            )
++
++        return super().destroy(request, *args, **kwargs)
++
+ 
+ class UserSourceConnectionSerializer(SourceSerializer):
+     """User source connection"""
+diff --git a/authentik/core/apps.py b/authentik/core/apps.py
+index 6fff9cb89f..87f7992682 100644
+--- a/authentik/core/apps.py
++++ b/authentik/core/apps.py
+@@ -32,5 +32,5 @@ class AuthentikCoreConfig(ManagedAppConfig):
+                 "name": "authentik Built-in",
+                 "slug": "authentik-built-in",
+             },
+-            managed="goauthentik.io/sources/inbuilt",
++            managed=Source.MANAGED_INBUILT,
+         )
+diff --git a/authentik/core/models.py b/authentik/core/models.py
+index 696bdf4bbd..9d68e0e6ae 100644
+--- a/authentik/core/models.py
++++ b/authentik/core/models.py
+@@ -668,6 +668,8 @@ class SourceGroupMatchingModes(models.TextChoices):
+ class Source(ManagedModel, SerializerModel, PolicyBindingModel):
+     """Base Authentication source, i.e. an OAuth Provider, SAML Remote or LDAP Server"""
+ 
++    MANAGED_INBUILT = "goauthentik.io/sources/inbuilt"
++
+     name = models.TextField(help_text=_("Source's display Name."))
+     slug = models.SlugField(help_text=_("Internal source name, used in URLs."), unique=True)
+ 
+diff --git a/web/src/admin/sources/SourceListPage.ts b/web/src/admin/sources/SourceListPage.ts
+index a9af5d2336..dae995212e 100644
+--- a/web/src/admin/sources/SourceListPage.ts
++++ b/web/src/admin/sources/SourceListPage.ts
+@@ -57,10 +57,13 @@ export class SourceListPage extends TablePage<Source> {
+     }
+ 
+     renderToolbarSelected(): TemplateResult {
+-        const disabled = this.selectedElements.length < 1;
++        const disabled =
++            this.selectedElements.length < 1 ||
++            this.selectedElements.some((item) => item.component === "");
++        const nonBuiltInSources = this.selectedElements.filter((item) => item.component !== "");
+         return html`<ak-forms-delete-bulk
+             objectLabel=${msg("Source(s)")}
+-            .objects=${this.selectedElements}
++            .objects=${nonBuiltInSources}
+             .usedBy=${(item: Source) => {
+                 return new SourcesApi(DEFAULT_CONFIG).sourcesAllUsedByList({
+                     slug: item.slug,
+-- 
+2.47.2
+
+
+From 8d76be03d8b7d535ff72dbef772153203f030abd Mon Sep 17 00:00:00 2001
+From: Dominic R <dominic@sdko.org>
+Date: Fri, 14 Mar 2025 22:59:25 -0400
+Subject: [PATCH 3/3] Squashed all commits of sdko/core/revamp-s3
+
+---
+ authentik/core/api/applications.py            |   34 +-
+ authentik/core/api/sources.py                 |   10 +-
+ authentik/core/models.py                      |   12 +
+ authentik/core/tests/test_applications_api.py |   83 +-
+ authentik/flows/api/flows.py                  |   10 +-
+ authentik/lib/utils/file.py                   |   56 +-
+ authentik/root/settings.py                    |   15 +-
+ authentik/root/storages.py                    | 1337 +++++++++++++++--
+ authentik/root/tests/test_storages.py         |  995 ++++++++++++
+ pyproject.toml                                |    1 +
+ web/src/admin/applications/ApplicationForm.ts |   72 +-
+ .../ak-application-wizard-submit-step.ts      |   82 +-
+ 12 files changed, 2510 insertions(+), 197 deletions(-)
+ create mode 100644 authentik/root/tests/test_storages.py
+
+diff --git a/authentik/core/api/applications.py b/authentik/core/api/applications.py
+index 54c4e3f3c2..681ddef61a 100644
+--- a/authentik/core/api/applications.py
++++ b/authentik/core/api/applications.py
+@@ -281,6 +281,13 @@ class ApplicationViewSet(UsedByMixin, ModelViewSet):
+         serializer = self.get_serializer(allowed_applications, many=True)
+         return self.get_paginated_response(serializer.data)
+ 
++    @action(
++        detail=True,
++        pagination_class=None,
++        filter_backends=[],
++        methods=["POST"],
++        parser_classes=(MultiPartParser,),
++    )
+     @permission_required("authentik_core.change_application")
+     @extend_schema(
+         request={
+@@ -288,35 +295,34 @@ class ApplicationViewSet(UsedByMixin, ModelViewSet):
+         },
+         responses={
+             200: OpenApiResponse(description="Success"),
+-            400: OpenApiResponse(description="Bad request"),
++            400: OpenApiResponse(description="Bad request", response={"error": str}),
++            403: OpenApiResponse(description="Permission denied", response={"error": str}),
++            415: OpenApiResponse(description="Unsupported Media Type", response={"error": str}),
++            500: OpenApiResponse(description="Internal server error", response={"error": str}),
+         },
+     )
++    def set_icon(self, request: Request, slug: str):
++        """Set application icon"""
++        app: Application = self.get_object()
++        return set_file(request, app, "meta_icon")
++
+     @action(
+         detail=True,
+         pagination_class=None,
+         filter_backends=[],
+         methods=["POST"],
+-        parser_classes=(MultiPartParser,),
+     )
+-    def set_icon(self, request: Request, slug: str):
+-        """Set application icon"""
+-        app: Application = self.get_object()
+-        return set_file(request, app, "meta_icon")
+-
+     @permission_required("authentik_core.change_application")
+     @extend_schema(
+         request=FilePathSerializer,
+         responses={
+             200: OpenApiResponse(description="Success"),
+-            400: OpenApiResponse(description="Bad request"),
++            400: OpenApiResponse(description="Bad request", response={"error": str}),
++            403: OpenApiResponse(description="Permission denied", response={"error": str}),
++            415: OpenApiResponse(description="Unsupported Media Type", response={"error": str}),
++            500: OpenApiResponse(description="Internal server error", response={"error": str}),
+         },
+     )
+-    @action(
+-        detail=True,
+-        pagination_class=None,
+-        filter_backends=[],
+-        methods=["POST"],
+-    )
+     def set_icon_url(self, request: Request, slug: str):
+         """Set application icon (as URL)"""
+         app: Application = self.get_object()
+diff --git a/authentik/core/api/sources.py b/authentik/core/api/sources.py
+index 0a6298e597..e987fccf99 100644
+--- a/authentik/core/api/sources.py
++++ b/authentik/core/api/sources.py
+@@ -101,7 +101,10 @@ class SourceViewSet(
+         },
+         responses={
+             200: OpenApiResponse(description="Success"),
+-            400: OpenApiResponse(description="Bad request"),
++            400: OpenApiResponse(description="Bad request", response={"error": str}),
++            403: OpenApiResponse(description="Permission denied", response={"error": str}),
++            415: OpenApiResponse(description="Unsupported Media Type", response={"error": str}),
++            500: OpenApiResponse(description="Internal server error", response={"error": str}),
+         },
+     )
+     @action(
+@@ -121,7 +124,10 @@ class SourceViewSet(
+         request=FilePathSerializer,
+         responses={
+             200: OpenApiResponse(description="Success"),
+-            400: OpenApiResponse(description="Bad request"),
++            400: OpenApiResponse(description="Bad request", response={"error": str}),
++            403: OpenApiResponse(description="Permission denied", response={"error": str}),
++            415: OpenApiResponse(description="Unsupported Media Type", response={"error": str}),
++            500: OpenApiResponse(description="Internal server error", response={"error": str}),
+         },
+     )
+     @action(
+diff --git a/authentik/core/models.py b/authentik/core/models.py
+index 9d68e0e6ae..64106a0283 100644
+--- a/authentik/core/models.py
++++ b/authentik/core/models.py
+@@ -551,9 +551,21 @@ class Application(SerializerModel, PolicyBindingModel):
+         """Get the URL to the App Icon image. If the name is /static or starts with http
+         it is returned as-is"""
+         if not self.meta_icon:
++            LOGGER.debug("No meta_icon set")
+             return None
++
++        LOGGER.debug(
++            "Getting meta_icon URL",
++            name=self.meta_icon.name,
++            url=self.meta_icon.url if hasattr(self.meta_icon, "url") else None,
++            storage_backend=self.meta_icon.storage.__class__.__name__,
++        )
++
+         if "://" in self.meta_icon.name or self.meta_icon.name.startswith("/static"):
++            LOGGER.debug("Using direct meta_icon name", name=self.meta_icon.name)
+             return self.meta_icon.name
++
++        LOGGER.debug("Using storage URL", url=self.meta_icon.url)
+         return self.meta_icon.url
+ 
+     def get_launch_url(self, user: Optional["User"] = None) -> str | None:
+diff --git a/authentik/core/tests/test_applications_api.py b/authentik/core/tests/test_applications_api.py
+index 192adc458b..4e1cd3e0bb 100644
+--- a/authentik/core/tests/test_applications_api.py
++++ b/authentik/core/tests/test_applications_api.py
+@@ -1,11 +1,14 @@
+ """Test Applications API"""
+ 
++import io
+ from json import loads
+ 
+ from django.core.files.base import ContentFile
++from django.core.files.uploadedfile import InMemoryUploadedFile
+ from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
+ from django.urls import reverse
+-from rest_framework.test import APITestCase
++from PIL import Image
++from rest_framework.test import APITransactionTestCase
+ 
+ from authentik.core.models import Application
+ from authentik.core.tests.utils import create_test_admin_user, create_test_flow
+@@ -17,7 +20,7 @@ from authentik.providers.proxy.models import ProxyProvider
+ from authentik.providers.saml.models import SAMLProvider
+ 
+ 
+-class TestApplicationsAPI(APITestCase):
++class TestApplicationsAPI(APITransactionTestCase):
+     """Test applications API"""
+ 
+     def setUp(self) -> None:
+@@ -40,6 +43,30 @@ class TestApplicationsAPI(APITestCase):
+             policy=DummyPolicy.objects.create(name="deny", result=False, wait_min=1, wait_max=2),
+             order=0,
+         )
++        self.test_files = []
++
++    def tearDown(self) -> None:
++        # Clean up any test files
++        for app in [self.allowed, self.denied]:
++            if app.meta_icon:
++                app.meta_icon.delete()
++        super().tearDown()
++
++    def create_test_image(self, name="test.png") -> ContentFile:
++        """Create a valid test PNG image file.
++
++        Args:
++            name: The name to give the test file
++
++        Returns:
++            ContentFile: A ContentFile containing a valid PNG image
++        """
++        # Create a small test image
++        image = Image.new("RGB", (1, 1), color="red")
++        img_io = io.BytesIO()
++        image.save(img_io, format="PNG")
++        img_io.seek(0)
++        return ContentFile(img_io.getvalue(), name=name)
+ 
+     def test_formatted_launch_url(self):
+         """Test formatted launch URL"""
+@@ -58,19 +85,34 @@ class TestApplicationsAPI(APITestCase):
+         )
+ 
+     def test_set_icon(self):
+-        """Test set_icon"""
+-        file = ContentFile(b"text", "name")
++        """Test set_icon and cleanup"""
++        # Create a test image file with a simple name
++        image = Image.new("RGB", (1, 1), color="red")
++        img_io = io.BytesIO()
++        image.save(img_io, format="PNG")
++        img_io.seek(0)
++        file = InMemoryUploadedFile(
++            img_io,
++            "file",
++            "test_icon.png",
++            "image/png",
++            len(img_io.getvalue()),
++            None,
++        )
+         self.client.force_login(self.user)
++
++        # Test setting icon
+         response = self.client.post(
+             reverse(
+                 "authentik_api:application-set-icon",
+                 kwargs={"slug": self.allowed.slug},
+             ),
+-            data=encode_multipart(data={"file": file}, boundary=BOUNDARY),
++            data=encode_multipart(BOUNDARY, {"file": file}),
+             content_type=MULTIPART_CONTENT,
+         )
+         self.assertEqual(response.status_code, 200)
+ 
++        # Verify icon was set correctly
+         app_raw = self.client.get(
+             reverse(
+                 "authentik_api:application-detail",
+@@ -80,7 +122,36 @@ class TestApplicationsAPI(APITestCase):
+         app = loads(app_raw.content)
+         self.allowed.refresh_from_db()
+         self.assertEqual(self.allowed.get_meta_icon, app["meta_icon"])
+-        self.assertEqual(self.allowed.meta_icon.read(), b"text")
++        file.seek(0)
++        self.assertEqual(self.allowed.meta_icon.read(), file.read())
++
++        # Test icon replacement
++        new_image = Image.new("RGB", (1, 1), color="blue")
++        new_img_io = io.BytesIO()
++        new_image.save(new_img_io, format="PNG")
++        new_img_io.seek(0)
++        new_file = InMemoryUploadedFile(
++            new_img_io,
++            "file",
++            "new_icon.png",
++            "image/png",
++            len(new_img_io.getvalue()),
++            None,
++        )
++        response = self.client.post(
++            reverse(
++                "authentik_api:application-set-icon",
++                kwargs={"slug": self.allowed.slug},
++            ),
++            data=encode_multipart(BOUNDARY, {"file": new_file}),
++            content_type=MULTIPART_CONTENT,
++        )
++        self.assertEqual(response.status_code, 200)
++
++        # Verify new icon was set and old one was cleaned up
++        self.allowed.refresh_from_db()
++        new_file.seek(0)
++        self.assertEqual(self.allowed.meta_icon.read(), new_file.read())
+ 
+     def test_check_access(self):
+         """Test check_access operation"""
+diff --git a/authentik/flows/api/flows.py b/authentik/flows/api/flows.py
+index 70bee5674c..a848f609f3 100644
+--- a/authentik/flows/api/flows.py
++++ b/authentik/flows/api/flows.py
+@@ -242,7 +242,10 @@ class FlowViewSet(UsedByMixin, ModelViewSet):
+         },
+         responses={
+             200: OpenApiResponse(description="Success"),
+-            400: OpenApiResponse(description="Bad request"),
++            400: OpenApiResponse(description="Bad request", response={"error": str}),
++            403: OpenApiResponse(description="Permission denied", response={"error": str}),
++            415: OpenApiResponse(description="Unsupported Media Type", response={"error": str}),
++            500: OpenApiResponse(description="Internal server error", response={"error": str}),
+         },
+     )
+     @action(
+@@ -262,7 +265,10 @@ class FlowViewSet(UsedByMixin, ModelViewSet):
+         request=FilePathSerializer,
+         responses={
+             200: OpenApiResponse(description="Success"),
+-            400: OpenApiResponse(description="Bad request"),
++            400: OpenApiResponse(description="Bad request", response={"error": str}),
++            403: OpenApiResponse(description="Permission denied", response={"error": str}),
++            415: OpenApiResponse(description="Unsupported Media Type", response={"error": str}),
++            500: OpenApiResponse(description="Internal server error", response={"error": str}),
+         },
+     )
+     @action(
+diff --git a/authentik/lib/utils/file.py b/authentik/lib/utils/file.py
+index d5b6056eb1..4ec8b67749 100644
+--- a/authentik/lib/utils/file.py
++++ b/authentik/lib/utils/file.py
+@@ -1,5 +1,8 @@
+ """file utils"""
+ 
++import os
++
++from django.core.exceptions import SuspiciousOperation
+ from django.db.models import Model
+ from django.http import HttpResponseBadRequest
+ from rest_framework.fields import BooleanField, CharField, FileField
+@@ -12,6 +15,15 @@ from authentik.core.api.utils import PassiveSerializer
+ LOGGER = get_logger()
+ 
+ 
++class FileValidationError(SuspiciousOperation):
++    """Custom exception for file validation errors."""
++
++    def __init__(self, message: str, status_code: int = 400):
++        super().__init__(message)
++        self.status_code = status_code
++        self.user_message = message
++
++
+ class FileUploadSerializer(PassiveSerializer):
+     """Serializer to upload file"""
+ 
+@@ -30,19 +42,55 @@ def set_file(request: Request, obj: Model, field_name: str):
+     field = getattr(obj, field_name)
+     file = request.FILES.get("file", None)
+     clear = request.data.get("clear", "false").lower() == "true"
++
++    # If clearing or replacing, delete the old file first
++    if (clear or file) and field:
++        try:
++            LOGGER.debug(
++                "Deleting old file before setting new one",
++                field_name=field_name,
++                old_file=field.name if field else None,
++            )
++            # Delete old file but don't save model yet
++            field.delete(save=False)
++        except Exception as exc:
++            LOGGER.warning("Failed to delete old file", exc=exc)
++
+     if clear:
+-        # .delete() saves the model by default
+-        field.delete()
++        # Save model after clearing
++        obj.save()
+         return Response({})
++
+     if file:
++        # Get the upload_to path from the model field
++        upload_to = field.field.upload_to
++        # If upload_to is set, ensure the file name includes the directory
++        if upload_to:
++            # Use basename to strip any path components from the filename
++            base_name = os.path.basename(file.name)
++            # Construct a clean path within the upload directory
++            file.name = f"{upload_to}/{base_name}"
+         setattr(obj, field_name, file)
+         try:
+             obj.save()
++        except FileValidationError as exc:
++            LOGGER.warning(
++                "File validation failed",
++                error=exc.user_message,
++                status_code=exc.status_code,
++                field=field_name,
++            )
++            return Response({"error": exc.user_message}, status=exc.status_code)
+         except PermissionError as exc:
+             LOGGER.warning("Failed to save file", exc=exc)
+-            return HttpResponseBadRequest()
++            return Response({"error": "Permission denied saving file"}, status=403)
++        except Exception as exc:
++            LOGGER.error("Unexpected error saving file", exc=exc)
++            return Response(
++                {"error": "An unexpected error occurred while saving the file"}, status=500
++            )
+         return Response({})
+-    return HttpResponseBadRequest()
++    return Response({"error": "No file provided"}, status=400)
+ 
+ 
+ def set_file_url(request: Request, obj: Model, field: str):
+diff --git a/authentik/root/settings.py b/authentik/root/settings.py
+index 8a8438b19b..740dbe5992 100644
+--- a/authentik/root/settings.py
++++ b/authentik/root/settings.py
+@@ -199,6 +199,7 @@ REST_FRAMEWORK = {
+     ],
+     "DEFAULT_PARSER_CLASSES": [
+         "drf_orjson_renderer.parsers.ORJSONParser",
++        "rest_framework.parsers.MultiPartParser",
+     ],
+     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+     "TEST_REQUEST_DEFAULT_FORMAT": "json",
+@@ -399,6 +400,8 @@ STORAGES = {
+ 
+ 
+ # Media files
++TEST = False
++
+ if CONFIG.get("storage.media.backend", "file") == "s3":
+     STORAGES["default"] = {
+         "BACKEND": "authentik.root.storages.S3Storage",
+@@ -423,6 +426,17 @@ if CONFIG.get("storage.media.backend", "file") == "s3":
+             "custom_domain": CONFIG.get("storage.media.s3.custom_domain", None),
+         },
+     }
++    if TEST:
++        STORAGES["default"]["OPTIONS"].update(
++            {
++                "access_key": "test-key",
++                "secret_key": "test-secret",
++                "bucket_name": "test-bucket",
++                "region_name": "us-east-1",
++                "endpoint_url": "http://localhost:8020",
++                "use_ssl": False,
++            }
++        )
+ # Fallback on file storage backend
+ else:
+     STORAGES["default"] = {
+@@ -437,7 +451,6 @@ else:
+     MEDIA_ROOT = STORAGES["default"]["OPTIONS"]["location"]
+     MEDIA_URL = STORAGES["default"]["OPTIONS"]["base_url"]
+ 
+-TEST = False
+ TEST_RUNNER = "authentik.root.test_runner.PytestTestRunner"
+ 
+ structlog_configure()
+diff --git a/authentik/root/storages.py b/authentik/root/storages.py
+index e76efb3374..8609fe3395 100644
+--- a/authentik/root/storages.py
++++ b/authentik/root/storages.py
+@@ -1,144 +1,1263 @@
+-"""authentik storage backends"""
++"""Storage backends for authentik with multi-tenant support.
++
++This module provides custom storage backends for handling file storage in a multi-tenant
++environment. It supports both filesystem and S3 storage options with proper tenant isolation.
++"""
+ 
+ import os
+-from urllib.parse import parse_qsl, urlsplit
++import uuid
++from pathlib import Path
++from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+ 
++import boto3
++from botocore.config import Config
++from botocore.exceptions import ClientError, NoCredentialsError, NoRegionError
++from defusedxml import ElementTree
+ from django.conf import settings
+-from django.core.exceptions import SuspiciousOperation
++from django.core.exceptions import ImproperlyConfigured, SuspiciousOperation
+ from django.core.files.storage import FileSystemStorage
++from django.core.files.uploadedfile import UploadedFile
+ from django.db import connection
++from PIL import Image
+ from storages.backends.s3 import S3Storage as BaseS3Storage
+-from storages.utils import clean_name, safe_join
++from storages.utils import safe_join
++from structlog.stdlib import get_logger
+ 
+ from authentik.lib.config import CONFIG
+ 
++LOGGER = get_logger()
+ 
+-class FileStorage(FileSystemStorage):
+-    """File storage backend"""
++# Mapping of allowed file extensions to their corresponding MIME types
++ALLOWED_IMAGE_EXTENSIONS = {
++    ".jpg": "image/jpeg",
++    ".jpeg": "image/jpeg",
++    ".png": "image/png",
++    ".gif": "image/gif",
++    ".webp": "image/webp",
++    ".svg": "image/svg+xml",
++    ".ico": "image/x-icon",
++}
+ 
+-    @property
+-    def base_location(self):
+-        return os.path.join(
+-            self._value_or_setting(self._location, settings.MEDIA_ROOT), connection.schema_name
++
++def _validate_svg_content(content: str) -> bool:
++    """Validate SVG content structure.
++
++    Args:
++        content: SVG content as string
++
++    Returns:
++        bool: True if content is valid SVG, False otherwise
++    """
++    try:
++        # Validate basic SVG structure
++        # Must have an SVG root element with proper closing tag
++        has_valid_start = content.startswith("<?xml") or content.startswith("<svg")
++        has_svg_element = "<svg" in content and "</svg>" in content
++
++        # Basic check for well-formed XML structure
++        ElementTree.fromstring(content.encode())
++        return has_valid_start and has_svg_element
++    except ElementTree.ParseError:
++        LOGGER.warning("Invalid SVG XML structure")
++        return False
++    except ValueError as e:
++        LOGGER.warning("Invalid SVG content", error=str(e))
++        return False
++
++
++def _validate_ico_content(content: bytes) -> bool:
++    """Validate ICO file content.
++
++    Args:
++        content: ICO file content as bytes
++
++    Returns:
++        bool: True if content is valid ICO, False otherwise
++    """
++    return content == b"\x00\x00\x01\x00"
++
++
++def _validate_pillow_image(file: UploadedFile, ext: str, name: str = "") -> bool:
++    """Validate image using Pillow.
++
++    Args:
++        file: Uploaded file
++        ext: File extension
++        name: Name of the file for logging purposes
++
++    Returns:
++        bool: True if file is valid image, False otherwise
++    """
++    try:
++        with Image.open(file) as img:
++            format_to_ext = {
++                "JPEG": ".jpg",
++                "PNG": ".png",
++                "GIF": ".gif",
++                "WEBP": ".webp",
++            }
++            detected_ext = format_to_ext.get(img.format)
++
++            if not detected_ext:
++                LOGGER.warning("Unrecognized image format", format=img.format, extension=ext)
++                return False
++
++            # Special handling for JPEG extension variants
++            is_jpeg = detected_ext == ".jpg" and ext in (".jpg", ".jpeg")
++            if not (detected_ext == ext or is_jpeg):
++                LOGGER.warning(
++                    "File extension doesn't match content",
++                    detected_format=img.format,
++                    extension=ext,
++                )
++                return False
++
++            # Verify image data integrity
++            img.verify()
++            return True
++
++    except Exception as e:
++        LOGGER.warning("Image validation failed", error=str(e), name=name)
++        raise FileValidationError(f"Failed to validate image: {str(e)}", status_code=415) from e
++    finally:
++        file.seek(0)
++
++
++class FileValidationError(SuspiciousOperation):
++    """Custom exception for file validation errors with status code and user message."""
++
++    def __init__(self, message: str, status_code: int = 400):
++        super().__init__(message)
++        self.status_code = status_code
++        self.user_message = message
++
++
++def validate_image_file(file: UploadedFile) -> bool:
++    """Validate that the uploaded file is a valid image in an allowed format.
++
++    Args:
++        file: The uploaded file to validate
++
++    Returns:
++        bool: True if file is valid
++
++    Raises:
++        FileValidationError: If file validation fails with specific error message and status code
++    """
++    if not file:
++        raise FileValidationError("No file was provided", status_code=400)
++
++    if not hasattr(file, "content_type"):
++        raise FileValidationError("File type could not be determined", status_code=400)
++
++    name = getattr(file, "name", "")
++    ext = os.path.splitext(name.lower())[1] if name else ""
++
++    if ext not in ALLOWED_IMAGE_EXTENSIONS:
++        allowed_exts = ", ".join(ALLOWED_IMAGE_EXTENSIONS.keys())
++        raise FileValidationError(
++            f"File type '{ext}' is not allowed. Allowed types are: {allowed_exts}",
++            status_code=415,  # Unsupported Media Type
+         )
+ 
+-    @property
+-    def location(self):
+-        return os.path.abspath(self.base_location)
++    expected_type = ALLOWED_IMAGE_EXTENSIONS.get(ext)
++    if file.content_type != expected_type:
++        raise FileValidationError(
++            f"Invalid content type '{file.content_type}' for {ext} file. Expected: {expected_type}",
++            status_code=415,
++        )
++
++    # Validate file content based on type
++    try:
++        if ext == ".svg":
++            content = file.read().decode("utf-8")
++            file.seek(0)
++            if not _validate_svg_content(content):
++                raise FileValidationError("Invalid SVG file format", status_code=415)
++        elif ext == ".ico":
++            content = file.read()
++            file.seek(0)
++            if not _validate_ico_content(content):
++                raise FileValidationError("Invalid ICO file format", status_code=415)
++        elif not _validate_pillow_image(file, ext, name):
++            raise FileValidationError(f"Invalid image format for {ext} file", status_code=415)
++        return True
++    except Exception as e:
++        LOGGER.warning("Image validation failed", error=str(e), name=name)
++        raise FileValidationError(f"Failed to validate image: {str(e)}", status_code=415) from e
++
++
++class TenantAwareStorage:
++    """Mixin providing tenant-aware path functionality for storage backends."""
+ 
+     @property
+-    def base_url(self):
+-        if self._base_url is not None and not self._base_url.endswith("/"):
+-            self._base_url += "/"
+-        return f"{self._base_url}/{connection.schema_name}/"
++    def tenant_prefix(self) -> str:
++        """Get current tenant schema prefix.
++
++        Returns:
++            str: The current tenant's schema name from the database connection.
++        """
++        return connection.schema_name
++
++    def get_tenant_path(self, name: str) -> str:
++        """Get tenant-specific path for storage.
++
++        Args:
++            name (str): Original file path/name.
++
++        Returns:
++            str: Path prefixed with tenant identifier for proper isolation.
++        """
++        return str(Path(self.tenant_prefix) / name)
++
++
++class FileStorage(TenantAwareStorage, FileSystemStorage):
++    """Multi-tenant filesystem storage backend."""
++
++    def __init__(self, *args, **kwargs):
++        """Initialize the storage backend with tenant-aware configuration.
+ 
++        Creates the base storage directory if it doesn't exist and sets up proper
++        permissions and logging.
+ 
+-class S3Storage(BaseS3Storage):
+-    """S3 storage backend"""
++        Args:
++            *args: Variable length argument list passed to parent classes
++            **kwargs: Arbitrary keyword arguments passed to parent classes
++
++        Raises:
++            PermissionError: If storage directory cannot be created due to permissions
++            OSError: If storage directory cannot be created due to filesystem errors
++        """
++        super().__init__(*args, **kwargs)
++        self._base_path = Path(self.location)
++        try:
++            self._base_path.mkdir(parents=True, exist_ok=True)
++            LOGGER.debug("Created storage directory", path=str(self._base_path))
++        except PermissionError as e:
++            LOGGER.critical(
++                "Permission denied creating storage directory",
++                path=str(self._base_path),
++                error=str(e),
++            )
++            raise
++        except OSError as e:
++            LOGGER.error(
++                "Filesystem error creating storage directory",
++                path=str(self._base_path),
++                error=str(e),
++            )
++            raise
++
++    def get_valid_name(self, name: str) -> str:
++        """Return a sanitized filename safe for storage.
++
++        Removes path components and applies additional sanitization from parent class.
++
++        Args:
++            name (str): Original filename
++
++        Returns:
++            str: Sanitized filename safe for storage
++        """
++        name = os.path.basename(name)
++        return super().get_valid_name(name)
+ 
+     @property
+-    def session_profile(self) -> str | None:
+-        """Get session profile"""
+-        return CONFIG.refresh("storage.media.s3.session_profile", None)
++    def base_location(self) -> Path:
++        """Get base storage directory including tenant prefix.
+ 
+-    @session_profile.setter
+-    def session_profile(self, value: str):
+-        pass
++        Returns:
++            Path: Complete path to tenant-specific storage directory
++        """
++        return Path(settings.MEDIA_ROOT) / self.tenant_prefix
+ 
+     @property
+-    def access_key(self) -> str | None:
+-        """Get access key"""
+-        return CONFIG.refresh("storage.media.s3.access_key", None)
++    def location(self) -> str:
++        """Get absolute path to storage directory.
+ 
+-    @access_key.setter
+-    def access_key(self, value: str):
+-        pass
++        Returns:
++            str: Absolute filesystem path to tenant storage directory
++        """
++        return os.path.abspath(self.base_location)
+ 
+     @property
+-    def secret_key(self) -> str | None:
+-        """Get secret key"""
+-        return CONFIG.refresh("storage.media.s3.secret_key", None)
++    def base_url(self) -> str:
++        """Get base URL for serving stored files with tenant prefix.
++
++        Ensures proper URL composition by validating and fixing MEDIA_URL format.
++
++        Returns:
++            str: Base URL with proper tenant prefix for serving files
++        """
++        base_url = settings.MEDIA_URL
++        if not base_url.endswith("/"):
++            LOGGER.warning(
++                "MEDIA_URL should end with '/' for proper URL composition", current_value=base_url
++            )
++            base_url += "/"
++        return f"{base_url}{self.tenant_prefix}/"
++
++    def _validate_path(self, name: str) -> str:
++        """Validate and sanitize a file path to prevent path-based attacks.
+ 
+-    @secret_key.setter
+-    def secret_key(self, value: str):
+-        pass
++        Args:
++            name (str): Original file path/name to validate
++
++        Returns:
++            str: Sanitized and validated file path/name
++
++        Raises:
++            SuspiciousOperation: If the path appears to be malicious
++        """
++        try:
++            base_name = os.path.basename(name)
++            dir_name = os.path.dirname(name)
++
++            base_name = self.get_valid_name(base_name)
++
++            # Check for path traversal attempts
++            if ".." in name:
++                raise ValueError("Path traversal attempt detected")
++
++            # If there's a directory component, validate it
++            if dir_name:
++                # Only allow alphanumeric chars, dashes, and forward slashes in directory names
++                if not all(c.isalnum() or c in "-/" for c in dir_name):
++                    raise ValueError("Invalid characters in directory name")
++                # Ensure the path is relative (doesn't start with /)
++                if dir_name.startswith("/"):
++                    dir_name = dir_name[1:]
++                return os.path.join(dir_name, base_name)
++
++            return base_name
++        except ValueError as e:
++            LOGGER.error("Invalid file path detected", name=name, error=str(e))
++            raise SuspiciousOperation(f"Invalid characters in filename '{name}'") from e
++
++    def path(self, name: str) -> str:
++        """Return full filesystem path to the file with security validation.
++
++        Args:
++            name (str): Name of the file
++
++        Returns:
++            str: Full filesystem path to the file
++
++        Raises:
++            SuspiciousOperation: If the path appears to be malicious
++        """
++        safe_name = self._validate_path(name)
++        # If the safe_name contains a directory component, ensure it exists
++        dir_name = os.path.dirname(safe_name)
++        if dir_name:
++            dir_path = os.path.join(self.location, dir_name)
++            try:
++                os.makedirs(dir_path, exist_ok=True)
++                LOGGER.debug("Created directory", path=dir_path)
++            except (PermissionError, OSError) as e:
++                LOGGER.error("Failed to create directory", path=dir_path, error=str(e))
++                raise
++
++        full_path = safe_join(self.location, safe_name)
++        LOGGER.debug("Resolved file path", name=safe_name, path=full_path)
++        return full_path
++
++    def _save(self, name: str, content) -> str:
++        """Save file with security validation.
++
++        Args:
++            name (str): Name of the file
++            content: File content to save
++
++        Returns:
++            str: Name of the saved file
++
++        Raises:
++            FileValidationError: If file validation fails
++            OSError: If file cannot be saved due to filesystem errors
++        """
++        try:
++            validate_image_file(content)
++        except FileValidationError as e:
++            LOGGER.warning(
++                "File validation failed",
++                name=name,
++                error=e.user_message,
++                status_code=e.status_code,
++                tenant=self.tenant_prefix,
++            )
++            raise
++
++        safe_name = self._validate_path(name)
++        return super()._save(safe_name, content)
++
++
++class S3Storage(TenantAwareStorage, BaseS3Storage):
++    """Multi-tenant S3 (compatible/Amazon) storage backend."""
++
++    CONFIG_KEYS = {
++        "session_profile": "storage.media.s3.session_profile",
++        "access_key": "storage.media.s3.access_key",
++        "secret_key": "storage.media.s3.secret_key",
++        "security_token": "storage.media.s3.security_token",
++        "bucket_name": "storage.media.s3.bucket_name",
++        "region_name": "storage.media.s3.region_name",
++        "endpoint_url": "storage.media.s3.endpoint",
++        "custom_domain": "storage.media.s3.custom_domain",
++    }
++
++    def __init__(self, **kwargs):
++        """Initialize S3Storage with configuration.
++
++        Args:
++            **kwargs: Configuration options passed to parent S3Storage
++
++        Raises:
++            ImproperlyConfigured: If AWS credentials or configuration is invalid
++        """
++        # Pre-fetch configuration values
++        self._session_profile = self._get_config_value("session_profile")
++        self._access_key = self._get_config_value("access_key")
++        self._secret_key = self._get_config_value("secret_key")
++        self._security_token = self._get_config_value("security_token")
++        self._bucket_name = self._get_config_value("bucket_name")
++        self._region_name = self._get_config_value("region_name")
++        self._endpoint_url = self._get_config_value("endpoint_url")
++        self._custom_domain = self._get_config_value("custom_domain")
++
++        # Debug
++        LOGGER.debug(
++            "S3Storage initialization",
++            has_session_profile=bool(self._session_profile),
++            has_access_key=(
++                bool(self._access_key) and self._access_key[:4] + "..."
++                if self._access_key
++                else None
++            ),
++            has_secret_key=bool(self._secret_key),
++            has_security_token=bool(self._security_token),
++            bucket_name=self._bucket_name,
++            region_name=self._region_name,
++            endpoint_url=self._endpoint_url,
++            custom_domain=self._custom_domain,
++            tenant=getattr(self, "tenant_prefix", "unknown"),
++            kwargs_keys=list(kwargs.keys()),
++        )
++
++        self._validate_configuration()
++
++        # Update kwargs with our configuration values
++        settings = kwargs.copy()
++        settings.update(
++            {
++                "session_profile": self._session_profile,
++                "access_key": self._access_key,
++                "secret_key": self._secret_key,
++                "security_token": self._security_token,
++                "bucket_name": self._bucket_name,
++                "region_name": self._region_name,
++                "endpoint_url": self._endpoint_url,
++                "custom_domain": self._custom_domain,
++                "querystring_auth": True,
++                "querystring_expire": 3600,
++            }
++        )
++
++        LOGGER.debug(
++            "S3Storage parent initialization",
++            settings_keys=list(settings.keys()),
++            tenant=getattr(self, "tenant_prefix", "unknown"),
++        )
++
++        # Initialize parent class with cleaned settings
++        try:
++            super().__init__(**settings)
++            LOGGER.debug(
++                "S3Storage parent initialization successful",
++                tenant=getattr(self, "tenant_prefix", "unknown"),
++            )
++        except Exception as e:
++            LOGGER.error(
++                "S3Storage parent initialization failed",
++                error=str(e),
++                error_type=type(e).__name__,
++                tenant=getattr(self, "tenant_prefix", "unknown"),
++            )
++            raise
++
++        self._client = None
++        self._s3_client = None
++        self._bucket = None
++        self._file_mapping = {}
++
++    def _get_config_value(self, key: str) -> str | None:
++        """Get refreshed configuration value from environment.
++
++        Args:
++            key (str): Configuration key from CONFIG_KEYS
++
++        Returns:
++            str | None: Configuration value if set, None otherwise
++        """
++        return CONFIG.refresh(self.CONFIG_KEYS[key], None)
++
++    def _validate_configuration(self):
++        """Validate AWS credentials and configuration settings.
++
++        1. Checks for conflicting authentication methods
++        2. Ensures required credentials are provided
++        3. Validates bucket name configuration
++
++        Raises:
++            ImproperlyConfigured: If configuration is invalid or incomplete
++        """
++        if self._session_profile and (self._access_key or self._secret_key):
++            LOGGER.error(
++                "Conflicting S3 storage configuration",
++                session_profile=self._session_profile,
++                has_access_key=bool(self._access_key),
++                has_secret_key=bool(self._secret_key),
++            )
++            raise ImproperlyConfigured(
++                "AUTHENTIK_STORAGE__MEDIA__S3__SESSION_PROFILE should not be provided with "
++                "AUTHENTIK_STORAGE__MEDIA__S3__ACCESS_KEY and "
++                "AUTHENTIK_STORAGE__MEDIA__S3__SECRET_KEY"
++            )
++
++        if not self._session_profile and not (self._access_key and self._secret_key):
++            LOGGER.error(
++                "Incomplete S3 configuration",
++                has_session_profile=bool(self._session_profile),
++                has_access_key=bool(self._access_key),
++                has_secret_key=bool(self._secret_key),
++            )
++            raise ImproperlyConfigured(
++                "Either AWS session profile or access key/secret pair must be configured"
++            )
++
++        if not self._bucket_name:
++            LOGGER.error("S3 bucket name not configured")
++            raise ImproperlyConfigured(
++                "AUTHENTIK_STORAGE__MEDIA__S3__BUCKET_NAME must be configured"
++            )
++
++        if not self._region_name:
++            LOGGER.warning(
++                "S3 region not configured, using default region", default_region="us-east-1"
++            )
+ 
+     @property
+-    def security_token(self) -> str | None:
+-        """Get security token"""
+-        return CONFIG.refresh("storage.media.s3.security_token", None)
++    def client(self):
++        """Get or create boto3 S3 client with current credentials.
++
++        Creates a new boto3 S3 client if none exists, using current AWS credentials.
++
++        Returns:
++            boto3.client: Configured S3 client instance
+ 
+-    @security_token.setter
+-    def security_token(self, value: str):
+-        pass
++        Raises:
++            ImproperlyConfigured: If AWS credentials are invalid
++            ClientError: If AWS client initialization fails
++        """
++        if not self._client or not self._s3_client:
++            try:
++                LOGGER.debug(
++                    "Creating boto3 session",
++                    profile_name=self._session_profile,
++                    has_access_key=(
++                        bool(self._access_key) and self._access_key[:4] + "..."
++                        if self._access_key
++                        else None
++                    ),
++                    has_secret_key=bool(self._secret_key),
++                    has_security_token=bool(self._security_token),
++                    tenant=self.tenant_prefix,
++                )
+ 
+-    def _normalize_name(self, name):
++                session = boto3.Session(
++                    profile_name=self._session_profile,
++                    aws_access_key_id=self._access_key,
++                    aws_secret_access_key=self._secret_key,
++                    aws_session_token=self._security_token,
++                )
++
++                LOGGER.debug(
++                    "Boto3 session created",
++                    available_profiles=session.available_profiles,
++                    profile_name=session.profile_name,
++                    region_name=session.region_name,
++                    tenant=self.tenant_prefix,
++                )
++
++                client_kwargs = {
++                    "region_name": self._region_name,
++                }
++                if self._endpoint_url:
++                    s3_config = Config(s3={"addressing_style": "path"})
++                    client_kwargs.update(
++                        {
++                            "endpoint_url": self._endpoint_url,
++                            "config": s3_config,
++                        }
++                    )
++                    LOGGER.debug(
++                        "Using custom S3 endpoint with path-style addressing",
++                        endpoint=self._endpoint_url,
++                        tenant=self.tenant_prefix,
++                    )
++
++                LOGGER.debug(
++                    "Creating S3 resource and client",
++                    client_kwargs=client_kwargs,
++                    tenant=self.tenant_prefix,
++                )
++
++                self._client = session.resource("s3", **client_kwargs)
++                self._s3_client = session.client("s3", **client_kwargs)
++
++                LOGGER.debug(
++                    "Created S3 resource and client",
++                    session_profile=self._session_profile,
++                    region=self._region_name,
++                    endpoint=self._endpoint_url,
++                    tenant=self.tenant_prefix,
++                )
++            except (NoCredentialsError, NoRegionError) as e:
++                LOGGER.critical(
++                    "AWS credentials/region configuration error",
++                    error=str(e),
++                    error_type=type(e).__name__,
++                    tenant=self.tenant_prefix,
++                )
++                raise ImproperlyConfigured(f"AWS configuration error: {e}") from e
++
++        return self._client
++
++    @property
++    def bucket(self):
++        """Get or create S3 bucket instance with access validation.
++
++        Creates a new S3 bucket instance if none exists and validates access permissions.
++
++        Returns:
++            boto3.s3.Bucket: Validated S3 bucket instance
++
++        Raises:
++            ImproperlyConfigured: If bucket doesn't exist or permissions are insufficient
++            ClientError: If bucket access fails
++        """
++        if not self._bucket:
++            bucket_name = self._get_config_value("bucket_name")
++            try:
++                # First check credentials by listing buckets
++                try:
++                    LOGGER.debug(
++                        "Listing S3 buckets to validate credentials",
++                        tenant=self.tenant_prefix,
++                    )
++                    buckets = list(self.client.buckets.all())
++                    bucket_names = [b.name for b in buckets]
++                    LOGGER.debug(
++                        "Successfully listed S3 buckets",
++                        bucket_count=len(bucket_names),
++                        buckets=bucket_names,
++                        target_bucket=bucket_name,
++                        bucket_exists=bucket_name in bucket_names,
++                        tenant=self.tenant_prefix,
++                    )
++                except (ClientError, NoCredentialsError) as e:
++                    if isinstance(e, ClientError):
++                        error_code = e.response.get("Error", {}).get("Code", "Unknown")
++                        error_message = e.response.get("Error", {}).get("Message", "Unknown error")
++                        LOGGER.critical(
++                            "Invalid AWS credentials",
++                            error_code=error_code,
++                            message=error_message,
++                            response=str(e.response),
++                            tenant=self.tenant_prefix,
++                        )
++                    else:
++                        LOGGER.critical(
++                            "Invalid AWS credentials",
++                            error=str(e),
++                            error_type=type(e).__name__,
++                            tenant=self.tenant_prefix,
++                        )
++                    raise ImproperlyConfigured("Invalid AWS credentials") from e
++
++                # Then check bucket existence and permissions
++                try:
++                    LOGGER.debug(
++                        "Checking S3 bucket existence and permissions",
++                        bucket=bucket_name,
++                        tenant=self.tenant_prefix,
++                    )
++                    bucket = self.client.Bucket(bucket_name)
++                    # Try to access the bucket to verify permissions
++                    list(bucket.objects.limit(1))
++                    LOGGER.debug(
++                        "Successfully verified S3 bucket access",
++                        bucket=bucket_name,
++                        tenant=self.tenant_prefix,
++                    )
++                except ClientError as e:
++                    error_code = e.response.get("Error", {}).get("Code", "Unknown")
++                    error_message = e.response.get("Error", {}).get("Message", "Unknown error")
++                    if error_code == "NoSuchBucket":
++                        LOGGER.error(
++                            "S3 bucket does not exist",
++                            bucket=bucket_name,
++                            error_code=error_code,
++                            message=error_message,
++                            tenant=self.tenant_prefix,
++                        )
++                        raise ImproperlyConfigured(
++                            f"S3 bucket '{bucket_name}' does not exist"
++                        ) from e
++                    elif error_code in ("AccessDenied", "AllAccessDisabled"):
++                        LOGGER.error(
++                            "Permission denied accessing S3 bucket",
++                            bucket=bucket_name,
++                            error_code=error_code,
++                            message=error_message,
++                            response=str(e.response),
++                            tenant=self.tenant_prefix,
++                        )
++                        raise ImproperlyConfigured(
++                            f"Permission denied accessing S3 bucket '{bucket_name}'. "
++                            "Please verify your IAM permissions"
++                        ) from e
++                    else:
++                        LOGGER.error(
++                            "Error accessing S3 bucket",
++                            bucket=bucket_name,
++                            error_code=error_code,
++                            message=error_message,
++                            response=str(e.response),
++                            tenant=self.tenant_prefix,
++                        )
++                        raise ImproperlyConfigured(
++                            f"Error accessing S3 bucket '{bucket_name}': {str(e)}"
++                        ) from e
++
++                LOGGER.debug(
++                    "Creating S3 bucket object",
++                    bucket=bucket_name,
++                    tenant=self.tenant_prefix,
++                )
++                self._bucket = bucket
++                LOGGER.info(
++                    "Successfully connected to S3 bucket",
++                    bucket=bucket_name,
++                    region=self._region_name,
++                    endpoint=self._endpoint_url,
++                    tenant=self.tenant_prefix,
++                )
++
++            except Exception as e:
++                LOGGER.error(
++                    "Unexpected error accessing S3",
++                    error=str(e),
++                    error_type=type(e).__name__,
++                    tenant=self.tenant_prefix,
++                )
++                if isinstance(e, ImproperlyConfigured):
++                    raise
++                raise ImproperlyConfigured(f"S3 configuration error: {str(e)}") from e
++
++        return self._bucket
++
++    def get_valid_name(self, name: str) -> str:
++        """Return a sanitized filename safe for S3 storage.
++
++        Removes path components and applies additional sanitization.
++
++        Args:
++            name (str): Original filename
++
++        Returns:
++            str: Sanitized filename safe for S3 storage
++        """
++        # For S3, we want to preserve the directory structure
++        dir_name = os.path.dirname(name)
++        base_name = os.path.basename(name)
++        base_name = super().get_valid_name(base_name)
++        if dir_name:
++            return os.path.join(dir_name, base_name)
++        return base_name
++
++    def _randomize_filename(self, filename: str) -> str:
++        """Generate a randomized filename while preserving extension.
++
++        Creates a unique filename using UUID while maintaining the original file extension.
++        Preserves the directory structure from the original filename.
++
++        Args:
++            filename (str): Original filename
++
++        Returns:
++            str: Randomized filename with original extension
++        """
++        dir_name = os.path.dirname(filename)
++        _, ext = os.path.splitext(filename)
++        random_uuid = str(uuid.uuid4())
++        randomized = f"{random_uuid}{ext.lower()}"
++
++        if dir_name:
++            randomized = os.path.join(dir_name, randomized)
++
++        LOGGER.debug(
++            "Randomized filename",
++            original=filename,
++            randomized=randomized,
++            tenant=self.tenant_prefix,
++        )
++        return randomized
++
++    def _normalize_name(self, name: str) -> str:
++        """Normalize file path for S3 storage with security validation.
++
++        Normalizes the file path and performs security checks to prevent
++        path traversal attacks. Ensures proper path structure.
++
++        Args:
++            name (str): Original file path/name
++
++        Returns:
++            str: Normalized path
++
++        Raises:
++            SuspiciousOperation: If the path appears to be malicious
++        """
++        if ".." in name:
++            raise SuspiciousOperation(f"Suspicious path: {name}")
++
++        # For S3, we want to preserve the directory structure but ensure it's relative
++        if name.startswith("/"):
++            name = name[1:]
++
++        name = name.replace("media/public/", "")
++
++        # Get the directory and base name components
++        dir_name = os.path.dirname(name)
++        base_name = os.path.basename(name)
++
++        # Validate the base name
++        base_name = self.get_valid_name(base_name)
++
++        # If there's a directory component, validate it
++        if dir_name:
++            # Only allow alphanumeric chars, dashes, and forward slashes in directory names
++            if not all(c.isalnum() or c in "-/" for c in dir_name):
++                raise SuspiciousOperation(f"Invalid characters in directory name: {dir_name}")
++            name = os.path.join(dir_name, base_name)
++        else:
++            name = base_name
++
++        # Add media prefix and tenant path
++        normalized = os.path.join("media", self.tenant_prefix, name)
++        LOGGER.debug(
++            "Normalized S3 key",
++            original=name,
++            normalized=normalized,
++        )
++        return normalized
++
++    def _delete_previous_instance_file(self, content) -> None:
++        """Delete the previous file from the model instance if it exists."""
++        if not (hasattr(content, "_instance") and hasattr(content._instance, content._field.name)):
++            return
++
++        old_file = getattr(content._instance, content._field.name)
++        if not old_file:
++            return
++
++        try:
++            old_name = old_file.name
++            LOGGER.debug(
++                "Deleting previous file from model instance",
++                name=old_name,
++                tenant=self.tenant_prefix,
++            )
++            old_file.delete(save=False)  # Don't save the model yet
++        except Exception as e:
++            LOGGER.warning(
++                "Failed to delete old file from model instance",
++                name=old_name,
++                error=str(e),
++                error_type=type(e).__name__,
++                tenant=self.tenant_prefix,
++            )
++
++    def _delete_previous_mapped_file(self, name: str) -> None:
++        """Delete the previous file with the same name from S3 if it exists in the mapping."""
++        if name not in self._file_mapping:
++            return
++
++        old_name = self._file_mapping[name]
++        try:
++            LOGGER.debug(
++                "Deleting previous file with same name",
++                name=name,
++                old_key=old_name,
++                tenant=self.tenant_prefix,
++            )
++            self.bucket.Object(old_name).delete()
++            self._file_mapping.pop(name)
++        except Exception as e:
++            LOGGER.warning(
++                "Failed to delete old file during replacement",
++                name=name,
++                old_key=old_name,
++                error=str(e),
++                error_type=type(e).__name__,
++                tenant=self.tenant_prefix,
++            )
++
++    def _upload_to_s3(self, normalized_name: str, content) -> None:
++        """Upload the file to S3 and verify the upload."""
++        LOGGER.debug(
++            "Creating S3 object for upload",
++            key=normalized_name,
++            tenant=self.tenant_prefix,
++        )
++        obj = self.bucket.Object(normalized_name)
++
++        LOGGER.debug(
++            "Uploading file to S3",
++            key=normalized_name,
++            tenant=self.tenant_prefix,
++        )
++        upload_kwargs = {}
++        if hasattr(content, "content_type") and content.content_type:
++            upload_kwargs["ContentType"] = content.content_type
++
++        obj.upload_fileobj(content, ExtraArgs=upload_kwargs if upload_kwargs else None)
++        self._verify_upload(obj, normalized_name)
++
++    def _verify_upload(self, obj, normalized_name: str) -> None:
++        """Verify that the upload was successful."""
++        LOGGER.debug(
++            "Upload to S3 completed, verifying object",
++            key=normalized_name,
++            tenant=self.tenant_prefix,
++        )
++
++        try:
++            obj_data = obj.load()
++            LOGGER.debug(
++                "Successfully verified S3 upload",
++                key=normalized_name,
++                object_data=str(obj_data),
++                tenant=self.tenant_prefix,
++            )
++        except ClientError as e:
++            error_code = e.response.get("Error", {}).get("Code", "Unknown")
++            error_message = e.response.get("Error", {}).get("Message", "Unknown error")
++            LOGGER.error(
++                "Failed to verify S3 upload",
++                key=normalized_name,
++                error_code=error_code,
++                message=error_message,
++                response=str(e.response),
++                tenant=self.tenant_prefix,
++            )
++            self._cleanup_failed_upload(obj, normalized_name)
++            raise
++
++    def _cleanup_failed_upload(self, obj, normalized_name: str) -> None:
++        """Clean up a failed upload by deleting the object."""
+         try:
++            LOGGER.debug(
++                "Cleaning up failed upload",
++                key=normalized_name,
++                tenant=self.tenant_prefix,
++            )
++            obj.delete()
++        except Exception as cleanup_error:
++            LOGGER.warning(
++                "Failed to clean up after failed upload",
++                key=normalized_name,
++                error=str(cleanup_error),
++                tenant=self.tenant_prefix,
++            )
++
++    def _log_save_attempt(
++        self, name: str, randomized_name: str, normalized_name: str, content
++    ) -> None:
++        """Log information about the file being saved to S3."""
++        LOGGER.info(
++            "Saving image to S3",
++            original_name=name,
++            randomized_name=randomized_name,
++            normalized_name=normalized_name,
++            content_type=getattr(content, "content_type", None),
++            content_length=getattr(content, "size", None),
++            tenant=self.tenant_prefix,
++        )
+ 
+-            return safe_join(self.location, connection.schema_name, name)
+-        except ValueError:
+-            raise SuspiciousOperation(f"Attempted access to '{name}' denied.") from None
+-
+-    # This is a fix for https://github.com/jschneier/django-storages/pull/839
+-    def url(self, name, parameters=None, expire=None, http_method=None):
+-        # Preserve the trailing slash after normalizing the path.
+-        name = self._normalize_name(clean_name(name))
+-        params = parameters.copy() if parameters else {}
+-        if expire is None:
+-            expire = self.querystring_expire
+-
+-        params["Bucket"] = self.bucket.name
+-        params["Key"] = name
+-        url = self.bucket.meta.client.generate_presigned_url(
+-            "get_object",
+-            Params=params,
+-            ExpiresIn=expire,
+-            HttpMethod=http_method,
++    def _log_save_success(self, normalized_name: str, name: str) -> None:
++        """Log successful file save to S3."""
++        LOGGER.debug(
++            "Image saved successfully to S3",
++            key=normalized_name,
++            original_name=name,
++            tenant=self.tenant_prefix,
+         )
+ 
+-        if self.custom_domain:
+-            # Key parameter can't be empty. Use "/" and remove it later.
+-            params["Key"] = "/"
+-            root_url_signed = self.bucket.meta.client.generate_presigned_url(
+-                "get_object", Params=params, ExpiresIn=expire
+-            )
+-            # Remove signing parameter and previously added key "/".
+-            root_url = self._strip_signing_parameters(root_url_signed)[:-1]
+-            # Replace bucket domain with custom domain.
+-            custom_url = f"{self.url_protocol}//{self.custom_domain}/"
+-            url = url.replace(root_url, custom_url)
+-
+-        if self.querystring_auth:
+-            return url
+-        return self._strip_signing_parameters(url)
+-
+-    def _strip_signing_parameters(self, url):
+-        # Boto3 does not currently support generating URLs that are unsigned. Instead
+-        # we take the signed URLs and strip any querystring params related to signing
+-        # and expiration.
+-        # Note that this may end up with URLs that are still invalid, especially if
+-        # params are passed in that only work with signed URLs, e.g. response header
+-        # params.
+-        # The code attempts to strip all query parameters that match names of known
+-        # parameters from v2 and v4 signatures, regardless of the actual signature
+-        # version used.
+-        split_url = urlsplit(url)
+-        qs = parse_qsl(split_url.query, keep_blank_values=True)
+-        blacklist = {
+-            "x-amz-algorithm",
+-            "x-amz-credential",
+-            "x-amz-date",
+-            "x-amz-expires",
+-            "x-amz-signedheaders",
+-            "x-amz-signature",
+-            "x-amz-security-token",
+-            "awsaccesskeyid",
+-            "expires",
+-            "signature",
+-        }
+-        filtered_qs = ((key, val) for key, val in qs if key.lower() not in blacklist)
+-        # Note: Parameters that did not have a value in the original query string will
+-        # have an '=' sign appended to it, e.g ?foo&bar becomes ?foo=&bar=
+-        joined_qs = ("=".join(keyval) for keyval in filtered_qs)
+-        split_url = split_url._replace(query="&".join(joined_qs))
+-        return split_url.geturl()
++    def _handle_save_error(self, e: Exception, name: str, normalized_name: str) -> None:
++        """Handle and log errors during file save operation."""
++        if isinstance(e, ClientError):
++            error_code = e.response.get("Error", {}).get("Code", "Unknown")
++            error_message = e.response.get("Error", {}).get("Message", "Unknown error")
++            LOGGER.error(
++                "Unexpected error saving image to S3",
++                name=name,
++                key=normalized_name,
++                error_code=error_code,
++                message=error_message,
++                response=str(e.response),
++                tenant=self.tenant_prefix,
++            )
++        else:
++            LOGGER.error(
++                "Unexpected error saving image to S3",
++                name=name,
++                key=normalized_name,
++                error=str(e),
++                error_type=type(e).__name__,
++                tenant=self.tenant_prefix,
++            )
++        raise e
++
++    def _save(self, name: str, content) -> str:
++        """Save image file to S3 with security validation and tenant isolation.
++
++        This storage backend is specifically designed for image files and will reject
++        any non-image files or invalid image formats. Generates a random filename and
++        uploads the file to the appropriate tenant-specific S3 location.
++
++        Args:
++            name (str): Original filename
++            content: Image file content to save
++
++        Returns:
++            str: Normalized S3 key of the saved file
++
++        Raises:
++            FileValidationError: If file validation fails with specific error message and
++            status code.
++            ClientError: If S3 upload fails
++        """
++        try:
++            validate_image_file(content)
++        except FileValidationError as e:
++            LOGGER.warning(
++                "File validation failed",
++                name=name,
++                error=e.user_message,
++                status_code=e.status_code,
++                tenant=self.tenant_prefix,
++            )
++            raise
++
++        self._delete_previous_instance_file(content)
++        self._delete_previous_mapped_file(name)
++
++        randomized_name = self._randomize_filename(name)
++        normalized_name = self._normalize_name(randomized_name)
++
++        self._log_save_attempt(name, randomized_name, normalized_name, content)
++
++        try:
++            self._upload_to_s3(normalized_name, content)
++            self._file_mapping[name] = normalized_name
++            self._log_save_success(normalized_name, name)
++            return normalized_name
++        except ClientError as e:
++            error_code = e.response.get("Error", {}).get("Code", "Unknown")
++            error_message = e.response.get("Error", {}).get("Message", "Unknown error")
++            status_code = 500
++            if error_code in ("AccessDenied", "AllAccessDisabled"):
++                status_code = 403
++            elif error_code == "NoSuchBucket":
++                status_code = 404
++
++            LOGGER.error(
++                "S3 upload failed",
++                name=name,
++                error_code=error_code,
++                message=error_message,
++                status_code=status_code,
++                tenant=self.tenant_prefix,
++            )
++            raise FileValidationError(
++                f"Failed to upload file: {error_message}", status_code=status_code
++            ) from e
++        except Exception as e:
++            LOGGER.error(
++                "Unexpected error saving file",
++                name=name,
++                error=str(e),
++                tenant=self.tenant_prefix,
++            )
++            if isinstance(e, FileValidationError):
++                raise
++            raise FileValidationError(
++                "An unexpected error occurred while saving the file", status_code=500
++            ) from e
++
++    def delete(self, name: str) -> None:
++        """Delete file from S3 storage.
++
++        Attempts to delete the file using either the mapped normalized name
++        or by normalizing the provided name.
++
++        Args:
++            name (str): Name of the file to delete
++
++        Note:
++            Silently ignores 404 errors when the file doesn't exist
++        """
++        try:
++            # Get normalized name from mapping or normalize original name
++            normalized_name = self._file_mapping.get(name, self._normalize_name(name))
++            obj = self.bucket.Object(normalized_name)
++
++            # Delete the object
++            obj.delete()
++
++            # Remove from mapping if exists
++            self._file_mapping.pop(name, None)
++
++            LOGGER.debug(
++                "File deleted from S3",
++                key=normalized_name,
++                tenant=self.tenant_prefix,
++            )
++        except ClientError as e:
++            if e.response.get("Error", {}).get("Code") != "404":
++                LOGGER.error(
++                    "Failed to delete file from S3",
++                    name=name,
++                    error=str(e),
++                    tenant=self.tenant_prefix,
++                )
++                raise
++            LOGGER.debug(
++                "File not found during delete",
++                name=name,
++                tenant=self.tenant_prefix,
++            )
++
++    def url(self, name: str, **kwargs) -> str:
++        """Generate URL for accessing the file.
++
++        Generates a signed URL for the file since buckets are private.
++        AWS signing parameters are required and preserved for authenticated access.
++
++        Args:
++            name (str): Name of the file
++            **kwargs: Additional arguments passed to the parent implementation
++
++        Returns:
++            str: Signed URL for accessing the file
++
++        Raises:
++            ClientError: If URL generation fails
++        """
++        try:
++            normalized_name = self._normalize_name(name)
++            LOGGER.debug(
++                "Generating URL for S3 object",
++                original_name=name,
++                normalized_name=normalized_name,
++                custom_domain=self._custom_domain,
++                endpoint_url=self._endpoint_url,
++                kwargs=kwargs,
++                tenant=self.tenant_prefix,
++            )
++
++            _ = self.client
++
++            # Generate presigned URL
++            url = self._s3_client.generate_presigned_url(
++                "get_object",
++                Params={
++                    "Bucket": self._bucket_name,
++                    "Key": normalized_name,
++                    "ResponseContentDisposition": "inline",
++                },
++                ExpiresIn=3600,
++            )
++
++            # If we have a custom domain, we need to preserve AWS signing parameters
++            if self._custom_domain:
++                try:
++                    # Parse the original URL to get AWS signing parameters
++                    parsed = urlparse(url)
++                    query_params = parse_qs(parsed.query)
++
++                    # Create new URL with custom domain but preserve AWS signing params
++                    custom_url = urlunparse(
++                        (
++                            parsed.scheme,
++                            self._custom_domain,
++                            normalized_name,
++                            "",
++                            urlencode(query_params, doseq=True),  # Keep all AWS signing params
++                            "",
++                        )
++                    )
++
++                    LOGGER.debug(
++                        "Generated signed URL for custom domain",
++                        key=name,
++                        normalized_key=normalized_name,
++                        url=custom_url,
++                        custom_domain=self._custom_domain,
++                        has_aws_algorithm=bool(query_params.get("X-Amz-Algorithm")),
++                        has_aws_credential=bool(query_params.get("X-Amz-Credential")),
++                        has_aws_signature=bool(query_params.get("X-Amz-Signature")),
++                        tenant=self.tenant_prefix,
++                    )
++                    return custom_url
++                except ClientError as e:
++                    LOGGER.error(
++                        "Failed to generate signed URL",
++                        error_code=e.response["Error"]["Code"],
++                        message=e.response["Error"]["Message"],
++                        key=name,
++                        normalized_key=normalized_name,
++                        tenant=self.tenant_prefix,
++                    )
++                    raise
++            else:
++                LOGGER.debug(
++                    "Using standard S3 URL",
++                    name=normalized_name,
++                    url=url,
++                    has_aws_algorithm="X-Amz-Algorithm" in url,
++                    has_aws_credential="X-Amz-Credential" in url,
++                    has_aws_signature="X-Amz-Signature" in url,
++                    tenant=self.tenant_prefix,
++                )
++                return url
++
++        except ClientError as e:
++            LOGGER.error(
++                "S3 URL generation failed",
++                error_code=e.response["Error"]["Code"],
++                message=e.response["Error"]["Message"],
++                key=name,
++                tenant=self.tenant_prefix,
++            )
++            raise
++        except Exception as e:
++            LOGGER.error(
++                "Unexpected error generating URL",
++                name=name,
++                error=str(e),
++                tenant=self.tenant_prefix,
++            )
++            raise
+diff --git a/authentik/root/tests/test_storages.py b/authentik/root/tests/test_storages.py
+new file mode 100644
+index 0000000000..66f02b6ea7
+--- /dev/null
++++ b/authentik/root/tests/test_storages.py
+@@ -0,0 +1,995 @@
++"""Test storage backends"""
++
++import io
++import os
++import shutil
++import tempfile
++from pathlib import Path
++from unittest.mock import MagicMock, patch
++
++from botocore.config import Config
++from botocore.exceptions import ClientError
++from django.core.exceptions import ImproperlyConfigured, SuspiciousOperation
++from django.core.files.base import ContentFile
++from django.core.files.uploadedfile import InMemoryUploadedFile
++from django.db import connection
++from django.test import TestCase
++from PIL import Image
++
++from authentik.root.storages import (
++    FileStorage,
++    S3Storage,
++    TenantAwareStorage,
++    validate_image_file,
++)
++
++
++class TestImageValidation(TestCase):
++    """Test image validation"""
++
++    def create_test_image(self, format: str, content_type: str) -> InMemoryUploadedFile:
++        """Create a test image file"""
++        image = Image.new("RGB", (100, 100), color="red")
++        img_io = io.BytesIO()
++        image.save(img_io, format=format)
++        img_io.seek(0)
++        return InMemoryUploadedFile(
++            img_io,
++            "meta_icon",
++            f"test.{format.lower()}",
++            content_type,
++            len(img_io.getvalue()),
++            None,
++        )
++
++    def test_valid_image_formats(self):
++        """Test validation of valid image formats"""
++        # Test PNG
++        png_file = self.create_test_image("PNG", "image/png")
++        self.assertTrue(validate_image_file(png_file))
++
++        # Test JPEG
++        jpeg_file = self.create_test_image("JPEG", "image/jpeg")
++        self.assertTrue(validate_image_file(jpeg_file))
++
++        # Test GIF
++        gif_file = self.create_test_image("GIF", "image/gif")
++        self.assertTrue(validate_image_file(gif_file))
++
++        # Test WEBP
++        webp_file = self.create_test_image("WEBP", "image/webp")
++        self.assertTrue(validate_image_file(webp_file))
++
++    def test_invalid_content_type(self):
++        """Test validation with invalid content type"""
++        png_file = self.create_test_image("PNG", "application/octet-stream")
++        self.assertFalse(validate_image_file(png_file))
++
++    def test_invalid_extension(self):
++        """Test validation with invalid extension"""
++        png_file = self.create_test_image("PNG", "image/png")
++        png_file.name = "test.txt"
++        self.assertFalse(validate_image_file(png_file))
++
++    def test_svg_validation(self):
++        """Test SVG validation"""
++        # Valid SVG
++        valid_svg = InMemoryUploadedFile(
++            io.BytesIO(b'<?xml version="1.0"?><svg></svg>'),
++            "meta_icon",
++            "test.svg",
++            "image/svg+xml",
++            11,
++            None,
++        )
++        self.assertTrue(validate_image_file(valid_svg))
++
++        # Invalid SVG
++        invalid_svg = InMemoryUploadedFile(
++            io.BytesIO(b"not an svg"), "meta_icon", "test.svg", "image/svg+xml", 10, None
++        )
++        self.assertFalse(validate_image_file(invalid_svg))
++
++    def test_non_image_file(self):
++        """Test validation of non-image file"""
++        text_file = InMemoryUploadedFile(
++            io.BytesIO(b"test content"), "meta_icon", "test.txt", "text/plain", 12, None
++        )
++        self.assertFalse(validate_image_file(text_file))
++
++    def test_corrupted_image(self):
++        """Test validation of corrupted image files"""
++        # Create a valid image first
++        image = Image.new("RGB", (100, 100), color="red")
++        img_io = io.BytesIO()
++        image.save(img_io, format="PNG")
++        img_io.seek(0)
++
++        # Corrupt the image data
++        data = bytearray(img_io.getvalue())
++        data[20:25] = b"XXXXX"  # Corrupt some bytes in the middle
++
++        corrupted_file = ContentFile(bytes(data), name="corrupted.png")
++        self.assertFalse(validate_image_file(corrupted_file))
++
++    def test_truncated_image(self):
++        """Test validation of truncated image files"""
++        # Create a valid image first
++        image = Image.new("RGB", (100, 100), color="red")
++        img_io = io.BytesIO()
++        image.save(img_io, format="PNG")
++        img_io.seek(0)
++
++        # Truncate the image data
++        data = img_io.getvalue()[:100]  # Only take first 100 bytes
++
++        truncated_file = ContentFile(data, name="truncated.png")
++        self.assertFalse(validate_image_file(truncated_file))
++
++    def test_invalid_svg_content(self):
++        """Test validation with malformed SVG content"""
++        # Test with incomplete SVG (no closing tag)
++        incomplete_svg = InMemoryUploadedFile(
++            io.BytesIO(b'<?xml version="1.0"?><svg>'),
++            "meta_icon",
++            "test.svg",
++            "image/svg+xml",
++            11,
++            None,
++        )
++        self.assertFalse(validate_image_file(incomplete_svg))
++
++        # Test with non-SVG XML
++        non_svg_xml = InMemoryUploadedFile(
++            io.BytesIO(b'<?xml version="1.0"?><not_svg></not_svg>'),
++            "meta_icon",
++            "test.svg",
++            "image/svg+xml",
++            11,
++            None,
++        )
++        self.assertFalse(validate_image_file(non_svg_xml))
++
++        # Test with malformed XML
++        malformed_xml = InMemoryUploadedFile(
++            io.BytesIO(b'<?xml version="1.0"?><svg><unclosed>'),
++            "meta_icon",
++            "test.svg",
++            "image/svg+xml",
++            11,
++            None,
++        )
++        self.assertFalse(validate_image_file(malformed_xml))
++
++        # Test with valid SVG
++        valid_svg = InMemoryUploadedFile(
++            io.BytesIO(b'<?xml version="1.0"?><svg></svg>'),
++            "meta_icon",
++            "test.svg",
++            "image/svg+xml",
++            11,
++            None,
++        )
++        self.assertTrue(validate_image_file(valid_svg))
++
++        # Test with valid SVG with content
++        valid_svg_with_content = InMemoryUploadedFile(
++            io.BytesIO(b'<?xml version="1.0"?><svg><circle cx="50" cy="50" r="40"/></svg>'),
++            "meta_icon",
++            "test.svg",
++            "image/svg+xml",
++            11,
++            None,
++        )
++        self.assertTrue(validate_image_file(valid_svg_with_content))
++
++    def test_invalid_ico_content(self):
++        """Test validation with invalid ICO content"""
++        # Test with invalid ICO header
++        invalid_ico = InMemoryUploadedFile(
++            io.BytesIO(b"\x00\x00\x02\x00"),  # Wrong magic number
++            "meta_icon",
++            "test.ico",
++            "image/x-icon",
++            4,
++            None,
++        )
++        self.assertFalse(validate_image_file(invalid_ico))
++
++        # Test with truncated ICO
++        truncated_ico = InMemoryUploadedFile(
++            io.BytesIO(b"\x00\x00"),  # Too short
++            "meta_icon",
++            "test.ico",
++            "image/x-icon",
++            2,
++            None,
++        )
++        self.assertFalse(validate_image_file(truncated_ico))
++
++
++class TestS3Storage(TestCase):
++    """Test S3 storage backend"""
++
++    def setUp(self):
++        """Set up test environment"""
++        super().setUp()
++        self.mock_client = MagicMock()
++        self.mock_bucket = MagicMock()
++        self.mock_object = MagicMock()
++
++        # Setup mock responses
++        self.mock_client.Bucket.return_value = self.mock_bucket
++        self.mock_bucket.Object.return_value = self.mock_object
++        self.mock_bucket.name = "test-bucket"
++
++        # Mock objects
++        self.mock_objects = {}
++        self.mock_bucket.Object.side_effect = lambda key: self.mock_objects.setdefault(
++            key, MagicMock()
++        )
++
++        # Setup successful validation by default
++        self.mock_client.list_buckets.return_value = {"Buckets": [{"Name": "test-bucket"}]}
++        self.mock_client.head_bucket.return_value = {}
++
++        # Mock the configuration before creating the storage instance
++        self.config_patcher = patch("authentik.lib.config.CONFIG.refresh")
++        self.mock_config = self.config_patcher.start()
++        self.mock_config.side_effect = lambda key, default: {
++            "storage.media.s3.access_key": "test-key",
++            "storage.media.s3.secret_key": "test-secret",
++            "storage.media.s3.bucket_name": "test-bucket",
++            "storage.media.s3.region_name": "us-east-1",
++        }.get(key, default)
++
++        # Create test storage with mocked client
++        self.session_patcher = patch("boto3.Session")
++        self.mock_session = self.session_patcher.start()
++        self.mock_session.return_value.client.return_value = self.mock_client
++        self.storage = S3Storage()
++        self.storage._bucket = self.mock_bucket
++
++    def tearDown(self):
++        """Clean up test environment"""
++        super().tearDown()
++        self.config_patcher.stop()
++        self.session_patcher.stop()
++
++    def create_test_image(self, name="test.png") -> ContentFile:
++        """Create a valid test PNG image file.
++
++        Args:
++            name: The name to give the test file
++
++        Returns:
++            ContentFile: A ContentFile containing a valid PNG image
++        """
++        # Create a small test image
++        image = Image.new("RGB", (1, 1), color="red")
++        img_io = io.BytesIO()
++        image.save(img_io, format="PNG")
++        img_io.seek(0)
++        return ContentFile(img_io.getvalue(), name=name)
++
++    def test_configuration_validation(self):
++        """Test configuration validation"""
++        # Test conflicting auth methods
++        with patch("authentik.lib.config.CONFIG.refresh") as mock_config:
++            mock_config.side_effect = lambda key, default: {
++                "storage.media.s3.session_profile": "test-profile",
++                "storage.media.s3.access_key": "test-key",
++                "storage.media.s3.secret_key": "test-secret",
++            }.get(key, default)
++
++            with self.assertRaises(ImproperlyConfigured) as cm:
++                S3Storage()
++            self.assertIn("should not be provided with", str(cm.exception))
++
++        # Test missing auth configuration
++        with patch("authentik.lib.config.CONFIG.refresh") as mock_config:
++            mock_config.side_effect = lambda key, default: {
++                "storage.media.s3.bucket_name": "test-bucket",
++            }.get(key, default)
++
++            with self.assertRaises(ImproperlyConfigured) as cm:
++                S3Storage()
++            self.assertIn("Either AWS session profile or access key/secret pair", str(cm.exception))
++
++        # Test missing bucket name
++        with patch("authentik.lib.config.CONFIG.refresh") as mock_config:
++            mock_config.side_effect = lambda key, default: {
++                "storage.media.s3.access_key": "test-key",
++                "storage.media.s3.secret_key": "test-secret",
++            }.get(key, default)
++
++            with self.assertRaises(ImproperlyConfigured) as cm:
++                S3Storage()
++            self.assertIn("BUCKET_NAME must be configured", str(cm.exception))
++
++    def test_bucket_validation(self):
++        """Test bucket validation and access checks"""
++        # Reset storage to test bucket validation
++        self.storage._bucket = None
++
++        # Test invalid credentials
++        self.mock_client.list_buckets.side_effect = ClientError(
++            {"Error": {"Code": "InvalidAccessKeyId", "Message": "Invalid access key"}},
++            "list_buckets",
++        )
++
++        with self.assertRaises(ImproperlyConfigured) as cm:
++            _ = self.storage.bucket
++        self.assertIn("Invalid AWS credentials", str(cm.exception))
++
++        # Reset for bucket not found test
++        self.mock_client.list_buckets.side_effect = None
++        self.mock_client.list_buckets.return_value = {"Buckets": []}
++        self.mock_client.head_bucket.side_effect = ClientError(
++            {"Error": {"Code": "404", "Message": "Not Found"}}, "head_bucket"
++        )
++
++        with self.assertRaises(ImproperlyConfigured) as cm:
++            _ = self.storage.bucket
++        self.assertIn("does not exist", str(cm.exception))
++
++        # Test permission denied
++        self.mock_client.head_bucket.side_effect = ClientError(
++            {"Error": {"Code": "403", "Message": "Forbidden"}}, "head_bucket"
++        )
++
++        with self.assertRaises(ImproperlyConfigured) as cm:
++            _ = self.storage.bucket
++        self.assertIn("Permission denied accessing S3 bucket", str(cm.exception))
++
++        # Test successful validation
++        self.mock_client.head_bucket.side_effect = None
++        self.storage._bucket = None
++        bucket = self.storage.bucket
++        self.assertEqual(bucket, self.mock_bucket)
++
++    def test_randomize_filename(self):
++        """Test filename randomization and tenant isolation"""
++        original_name = "test.jpg"
++        randomized = self.storage._randomize_filename(original_name)
++
++        # Verify format: {tenant_hash}_{uuid4}{extension}
++        parts = randomized.split("_")
++        self.assertEqual(len(parts), 2)
++
++        # Verify tenant hash length (8 chars)
++        self.assertEqual(len(parts[0]), 8)
++
++        # Verify extension preserved and lowercased
++        self.assertTrue(parts[1].endswith(".jpg"))
++
++        # Test with uppercase extension
++        upper_name = "TEST.JPG"
++        randomized_upper = self.storage._randomize_filename(upper_name)
++        self.assertTrue(randomized_upper.endswith(".jpg"))
++
++        # Verify different names for same file
++        another_random = self.storage._randomize_filename(original_name)
++        self.assertNotEqual(randomized, another_random)
++
++        # Verify tenant isolation
++        with patch.object(connection, "schema_name", "another_tenant"):
++            different_tenant = self.storage._randomize_filename(original_name)
++            self.assertNotEqual(randomized[:8], different_tenant[:8])
++
++    def test_normalize_name(self):
++        """Test S3 key normalization"""
++        test_name = "test.txt"
++        normalized = self.storage._normalize_name(test_name)
++
++        # Verify tenant path is included
++        self.assertIn(connection.schema_name, normalized)
++
++        # Test with suspicious path
++        with self.assertRaises(SuspiciousOperation):
++            self.storage._normalize_name("../test.txt")
++
++    def test_save_and_delete(self):
++        """Test file save and delete operations"""
++        test_file = self.create_test_image()
++
++        # Mock successful upload
++        self.mock_object.load.return_value = None
++
++        # Save file
++        name = self.storage._save("test.png", test_file)
++
++        # Verify file was saved with tenant prefix
++        self.assertTrue(name.startswith(self.storage.tenant_prefix))
++        self.assertTrue(name.endswith(".png"))
++
++        # Delete file
++        self.storage.delete(name)
++        self.mock_object.delete.assert_called_once()
++
++    def test_file_replacement(self):
++        """Test file replacement and old file cleanup"""
++        # Setup initial file
++        initial_file = self.create_test_image()
++        self.mock_object.load.return_value = None
++
++        initial_name = self.storage._save("test.png", initial_file)
++
++        # Replace with new file
++        new_file = self.create_test_image()  # Create a new image instance
++        new_name = self.storage._save("test.png", new_file)
++
++        # Verify both saves worked and generated different names
++        self.assertNotEqual(initial_name, new_name)
++        self.assertTrue(new_name.startswith(self.storage.tenant_prefix))
++        self.assertTrue(new_name.endswith(".png"))
++
++    def test_failed_upload_cleanup(self):
++        """Test cleanup of failed uploads"""
++        test_file = self.create_test_image()
++
++        # Mock failed upload verification
++        self.mock_object.load.side_effect = ClientError(
++            {"Error": {"Code": "404", "Message": "Not Found"}}, "head_object"
++        )
++
++        # Attempt save
++        with self.assertRaises(ClientError):
++            self.storage._save("test.png", test_file)
++
++        # Verify cleanup was attempted
++        self.mock_object.delete.assert_called_once()
++
++    def test_url_generation(self):
++        """Test URL generation with custom domain"""
++        self.storage.custom_domain = "cdn.example.com"
++
++        # Mock successful file check
++        self.mock_object.load.return_value = None
++
++        # Save test file
++        test_file = self.create_test_image()
++        name = self.storage._save("test.png", test_file)
++
++        # Get URL
++        url = self.storage.url(name)
++
++        # Verify URL uses custom domain
++        self.assertTrue(url.startswith("https://cdn.example.com/"))
++        self.assertTrue(url.endswith(".png"))
++        self.assertIn(self.storage.tenant_prefix, url)
++
++        # Verify no AWS signing parameters
++        self.assertNotIn("X-Amz-Algorithm", url)
++        self.assertNotIn("X-Amz-Credential", url)
++        self.assertNotIn("X-Amz-Date", url)
++        self.assertNotIn("X-Amz-Expires", url)
++        self.assertNotIn("X-Amz-SignedHeaders", url)
++        self.assertNotIn("X-Amz-Signature", url)
++
++    def test_save_invalid_image(self):
++        """Test rejection of invalid image files"""
++        invalid_content = b"not an image"
++        invalid_file = ContentFile(invalid_content, name="test.png")
++
++        with self.assertRaises(SuspiciousOperation) as cm:
++            self.storage._save("test.png", invalid_file)
++
++        self.assertIn("only accepts valid image files", str(cm.exception))
++
++    def test_save_non_image(self):
++        """Test rejection of non-image files"""
++        text_file = ContentFile(b"test content", name="test.txt")
++
++        with self.assertRaises(SuspiciousOperation) as cm:
++            self.storage._save("test.txt", text_file)
++
++        self.assertIn("only accepts valid image files", str(cm.exception))
++
++    def test_delete_nonexistent(self):
++        """Test deleting non-existent file"""
++        # Mock 404 response
++        self.mock_object.load.side_effect = ClientError(
++            {"Error": {"Code": "404", "Message": "Not Found"}}, "head_object"
++        )
++
++        # Should not raise an error
++        self.storage.delete("nonexistent.txt")
++
++        # Verify delete was still attempted
++        self.mock_object.delete.assert_called_once()
++
++    def test_save_valid_image(self):
++        """Test saving valid image file"""
++        test_file = self.create_test_image()
++
++        # Mock successful upload
++        self.mock_object.load.return_value = None
++
++        # Should not raise an exception
++        name = self.storage._save("test.png", test_file)
++        self.assertTrue(name.endswith(".png"))
++
++    def test_set_icon(self):
++        """Test set icon and cleanup"""
++        # Create a test image file
++        test_file = self.create_test_image()
++
++        # Save initial icon
++        old_key = self.storage._save("test_icon.png", test_file)
++        old_mock_object = self.mock_objects[old_key]
++
++        # Replace with new icon
++        new_file = self.create_test_image()
++        new_key = self.storage._save("new_icon.png", new_file)
++
++        # Verify old file was deleted
++        old_mock_object.delete.assert_called_once()
++
++        # Verify new file was saved
++        new_mock_object = self.mock_objects[new_key]
++        new_mock_object.load.assert_called_once()
++
++    def test_file_listing(self):
++        """Test file listing operations"""
++        # Setup mock objects for listing
++        self.mock_bucket.objects.filter.return_value = [
++            MagicMock(key="tenant1/file1.txt"),
++            MagicMock(key="tenant1/dir1/file2.txt"),
++            MagicMock(key="tenant2/file3.txt"),  # Should not be listed
++        ]
++
++        # Test listing with tenant isolation
++        with patch("django.db.connection") as mock_conn:
++            mock_conn.schema_name = "tenant1"
++
++            # List root directory
++            dirs, files = self.storage.listdir("")
++            self.assertEqual(set(files), {"file1.txt"})
++            self.assertEqual(set(dirs), {"dir1"})
++
++            # List subdirectory
++            dirs, files = self.storage.listdir("dir1")
++            self.assertEqual(set(files), {"file2.txt"})
++            self.assertEqual(set(dirs), set())
++
++    def test_file_size_and_modified_time(self):
++        """Test file size and modified time methods"""
++        # Setup mock object
++        mock_obj = MagicMock()
++        mock_obj.content_length = 1234
++        mock_obj.last_modified = "2025-01-01 12:00:00"
++        self.mock_objects["tenant1/test.txt"] = mock_obj
++
++        with patch("django.db.connection") as mock_conn:
++            mock_conn.schema_name = "tenant1"
++
++            # Test size
++            self.assertEqual(self.storage.size("test.txt"), 1234)
++
++            # Test modified time
++            modified_time = self.storage.get_modified_time("test.txt")
++            self.assertIsNotNone(modified_time)
++
++    def test_file_exists(self):
++        """Test file existence checks"""
++
++        # Setup mock responses
++        def mock_head_object(Key):
++            if Key == "tenant1/exists.txt":
++                return {}
++            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "head_object")
++
++        self.mock_client.head_object = MagicMock(side_effect=mock_head_object)
++
++        with patch("django.db.connection") as mock_conn:
++            mock_conn.schema_name = "tenant1"
++
++            # Test existing file
++            self.assertTrue(self.storage.exists("exists.txt"))
++
++            # Test non-existent file
++            self.assertFalse(self.storage.exists("nonexistent.txt"))
++
++    def test_image_content_type_handling(self):
++        """Test handling of image content types"""
++        test_cases = [
++            # Valid image types
++            ("test.png", "image/png", True),
++            ("test.jpg", "image/jpeg", True),
++            ("test.jpeg", "image/jpeg", True),
++            ("test.gif", "image/gif", True),
++            ("test.webp", "image/webp", True),
++            ("test.svg", "image/svg+xml", True),
++            ("test.ico", "image/x-icon", True),
++            # Invalid content types
++            ("test.png", "text/plain", False),
++            ("test.jpg", "application/octet-stream", False),
++            ("test.svg", "text/xml", False),
++            ("test.ico", "application/octet-stream", False),
++        ]
++
++        for filename, content_type, should_succeed in test_cases:
++            # Create test file with appropriate content
++            if filename.endswith(".svg"):
++                content = b'<?xml version="1.0"?><svg></svg>'
++            elif filename.endswith(".ico"):
++                content = b"\x00\x00\x01\x00"  # Valid ICO header
++            else:
++                # Create a valid image for other formats
++                image = Image.new("RGB", (10, 10), color="red")
++                img_io = io.BytesIO()
++                image.save(img_io, format=filename.split(".")[-1].upper())
++                content = img_io.getvalue()
++
++            test_file = ContentFile(content, name=filename)
++            test_file.content_type = content_type
++
++            # Mock successful upload
++            mock_obj = MagicMock()
++            self.mock_objects[f"tenant1/{filename}"] = mock_obj
++
++            with patch("django.db.connection") as mock_conn:
++                mock_conn.schema_name = "tenant1"
++
++                if should_succeed:
++                    # Should succeed for valid image types
++                    name = self.storage._save(filename, test_file)
++                    self.assertTrue(name.endswith(filename))
++                    mock_obj.upload_fileobj.assert_called_once()
++                else:
++                    # Should fail for non-image types
++                    with self.assertRaises(SuspiciousOperation) as cm:
++                        self.storage._save(filename, test_file)
++                    self.assertIn("only accepts valid image files", str(cm.exception))
++
++    def test_large_file_operations(self):
++        """Test handling of large files with multipart upload"""
++        # Create a large file (5MB)
++        large_file = io.BytesIO(b"0" * (5 * 1024 * 1024))
++
++        with patch.object(self.storage.bucket, "upload_fileobj") as mock_upload:
++            # Mock transfer config
++            self.storage.transfer_config = Config(
++                multipart_threshold=1 * 1024 * 1024, max_concurrency=2  # 1MB
++            )
++
++            # Save large file
++            self.storage._save("large.bin", large_file)
++
++            # Verify multipart upload was used
++            mock_upload.assert_called_once()
++            _, kwargs = mock_upload.call_args
++            self.assertIn("Config", str(kwargs))
++
++    def test_error_handling(self):
++        """Test various error conditions"""
++        with patch("django.db.connection") as mock_conn:
++            mock_conn.schema_name = "tenant1"
++
++            # Test network error
++            self.mock_object.upload_fileobj.side_effect = ClientError(
++                {"Error": {"Code": "NetworkError", "Message": "Network Error"}}, "upload_fileobj"
++            )
++            with self.assertRaises(ClientError):
++                self.storage._save("test.txt", ContentFile(b"content"))
++
++            # Test permission denied
++            self.mock_object.upload_fileobj.side_effect = ClientError(
++                {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}, "upload_fileobj"
++            )
++            with self.assertRaises(ClientError):
++                self.storage._save("test.txt", ContentFile(b"content"))
++
++            # Test bucket not found
++            self.mock_object.upload_fileobj.side_effect = ClientError(
++                {"Error": {"Code": "NoSuchBucket", "Message": "Bucket not found"}}, "upload_fileobj"
++            )
++            with self.assertRaises(ClientError):
++                self.storage._save("test.txt", ContentFile(b"content"))
++
++    def test_url_generation_punycode_domain(self):
++        """Test URL generation with punycode custom domain"""
++        self.storage.custom_domain = "bucket.xn--idk5byd.net"  # ニャー.net in punycode
++
++        # Mock successful file check
++        self.mock_object.load.return_value = None
++
++        # Mock S3 client's generate_presigned_url
++        self.storage._s3_client = MagicMock()
++        self.storage._s3_client.generate_presigned_url.return_value = (
++            "https://test-bucket.s3.amazonaws.com/test.png"
++            "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
++            "&X-Amz-Credential=test"
++            "&X-Amz-Date=20240314T000000Z"
++            "&X-Amz-Expires=3600"
++            "&X-Amz-SignedHeaders=host"
++            "&X-Amz-Signature=test"
++        )
++
++        # Save test file
++        test_file = self.create_test_image()
++        name = self.storage._save("test.png", test_file)
++
++        # Get URL
++        url = self.storage.url(name)
++
++        # Verify URL uses custom domain
++        self.assertTrue(url.startswith("https://bucket.xn--idk5byd.net/"))
++        self.assertTrue("X-Amz-Algorithm=AWS4-HMAC-SHA256" in url)
++        self.assertTrue("X-Amz-SignedHeaders=host" in url)
++        self.assertTrue("X-Amz-Signature=test" in url)
++
++
++class TestTenantAwareStorage(TestCase):
++    """Test TenantAwareStorage mixin"""
++
++    def setUp(self):
++        """Set up test environment"""
++        super().setUp()
++        self.storage = TenantAwareStorage()
++
++    def test_tenant_prefix(self):
++        """Test tenant prefix property"""
++        # Mock the connection schema_name
++        with patch("django.db.connection") as mock_conn:
++            mock_conn.schema_name = "test_tenant"
++            self.assertEqual(self.storage.tenant_prefix, "test_tenant")
++
++    def test_get_tenant_path(self):
++        """Test get_tenant_path method"""
++        with patch("django.db.connection") as mock_conn:
++            mock_conn.schema_name = "test_tenant"
++            path = self.storage.get_tenant_path("test.txt")
++            self.assertEqual(path, "test_tenant/test.txt")
++
++
++class TestFileStorage(TestCase):
++    """Test FileStorage backend"""
++
++    def setUp(self):
++        """Set up test environment"""
++        super().setUp()
++        self.temp_dir = tempfile.mkdtemp()
++        self.storage = FileStorage(location=self.temp_dir)
++
++    def tearDown(self):
++        """Clean up test environment"""
++        super().tearDown()
++        shutil.rmtree(self.temp_dir)
++
++    def test_init_creates_directory(self):
++        """Test that __init__ creates the storage directory"""
++        test_dir = os.path.join(self.temp_dir, "test_storage")
++        FileStorage(location=test_dir)
++        self.assertTrue(os.path.exists(test_dir))
++
++    def test_init_permission_error(self):
++        """Test __init__ with permission error"""
++        with patch("pathlib.Path.mkdir") as mock_mkdir:
++            mock_mkdir.side_effect = PermissionError()
++            with self.assertRaises(PermissionError):
++                FileStorage(location="/root/test")  # Should fail due to permissions
++
++    def test_init_os_error(self):
++        """Test __init__ with OS error"""
++        with patch("pathlib.Path.mkdir") as mock_mkdir:
++            mock_mkdir.side_effect = OSError()
++            with self.assertRaises(OSError):
++                FileStorage(location="\0invalid")  # Should fail due to invalid path
++
++    def test_get_valid_name(self):
++        """Test get_valid_name method"""
++        test_cases = [
++            ("test.txt", "test.txt"),  # Simple case
++            ("../test.txt", "test.txt"),  # Path traversal attempt
++            ("dir/test.txt", "dir/test.txt"),  # Subdirectory
++            ("test/../../etc/passwd", "test/etc/passwd"),  # "Complex" path traversal attempt
++        ]
++        for input_name, expected in test_cases:
++            self.assertEqual(self.storage.get_valid_name(input_name), expected)
++
++    def test_base_location(self):
++        """Test base_location property"""
++        self.assertEqual(self.storage.base_location, Path(self.temp_dir))
++
++    def test_location(self):
++        """Test location property"""
++        self.assertEqual(self.storage.location, str(Path(self.temp_dir)))
++
++    def test_base_url(self):
++        """Test base_url property"""
++        # Test with default settings
++        self.assertEqual(self.storage.base_url, "/media/")
++
++        # Test with custom settings
++        with self.settings(MEDIA_URL="/custom/"):
++            storage = FileStorage(location=self.temp_dir)
++            self.assertEqual(storage.base_url, "/custom/")
++
++    def test_validate_path(self):
++        """Test _validate_path method"""
++        valid_paths = [
++            "test.txt",
++            "dir/test.txt",
++            "dir/subdir/test.txt",
++        ]
++        invalid_paths = [
++            "../test.txt",
++            "dir/../../../etc/passwd",
++            "/etc/passwd",
++            "//etc/passwd",
++        ]
++
++        for path in valid_paths:
++            try:
++                self.storage._validate_path(path)
++            except Exception as e:
++                self.fail(f"Valid path {path} raised {e}")
++
++        for path in invalid_paths:
++            with self.assertRaises(SuspiciousOperation):
++                self.storage._validate_path(path)
++
++    def test_path(self):
++        """Test path method"""
++        test_cases = [
++            ("test.txt", os.path.join(self.temp_dir, "test.txt")),
++            ("dir/test.txt", os.path.join(self.temp_dir, "dir", "test.txt")),
++        ]
++        for input_name, expected in test_cases:
++            self.assertEqual(self.storage.path(input_name), str(Path(expected)))
++
++    def test_save(self):
++        """Test _save method"""
++        content = ContentFile(b"test content")
++        name = self.storage._save("test.txt", content)
++
++        # Verify file was saved
++        self.assertTrue(os.path.exists(os.path.join(self.temp_dir, name)))
++
++        # Verify content
++        with open(os.path.join(self.temp_dir, name), "rb") as f:
++            self.assertEqual(f.read(), b"test content")
++
++        # Test with nested directory
++        content = ContentFile(b"nested content")
++        name = self.storage._save("dir/test.txt", content)
++
++        # Verify file was saved
++        self.assertTrue(os.path.exists(os.path.join(self.temp_dir, name)))
++
++        # Verify content
++        with open(os.path.join(self.temp_dir, name), "rb") as f:
++            self.assertEqual(f.read(), b"nested content")
++
++    def test_file_operations(self):
++        """Test complete file lifecycle operations"""
++        # Create test content
++        content = ContentFile(b"test content")
++
++        # Test file save
++        name = self.storage._save("test.txt", content)
++        file_path = os.path.join(self.temp_dir, name)
++
++        # Test file exists
++        self.assertTrue(self.storage.exists(name))
++        self.assertTrue(os.path.exists(file_path))
++
++        # Test file size
++        self.assertEqual(self.storage.size(name), len(b"test content"))
++
++        # Test file URL
++        self.assertEqual(self.storage.url(name), f"/media/{name}")
++
++        # Test file open and read
++        with self.storage.open(name, "rb") as f:
++            self.assertEqual(f.read(), b"test content")
++
++        # Test file delete
++        self.storage.delete(name)
++        self.assertFalse(self.storage.exists(name))
++        self.assertFalse(os.path.exists(file_path))
++
++    def test_tenant_isolation(self):
++        """Test tenant isolation in file operations"""
++        content = ContentFile(b"tenant1 content")
++
++        # Test with first tenant
++        with patch("django.db.connection") as mock_conn:
++            mock_conn.schema_name = "tenant1"
++            name1 = self.storage._save("test.txt", content)
++            self.assertTrue(name1.startswith("tenant1/"))
++            self.assertTrue(self.storage.exists(name1))
++
++        # Test with second tenant
++        with patch("django.db.connection") as mock_conn:
++            mock_conn.schema_name = "tenant2"
++            # Same filename should create different path
++            name2 = self.storage._save("test.txt", content)
++            self.assertTrue(name2.startswith("tenant2/"))
++            self.assertTrue(self.storage.exists(name2))
++
++            # Should not see tenant1's file
++            self.assertFalse(self.storage.exists(name1))
++
++    def test_file_overwrite(self):
++        """Test file overwrite behavior"""
++        content1 = ContentFile(b"original content")
++        content2 = ContentFile(b"new content")
++
++        # Save original file
++        name = self.storage._save("test.txt", content1)
++
++        # Try to save file with same name
++        name2 = self.storage._save("test.txt", content2)
++
++        # Names should be different to prevent overwrite
++        self.assertNotEqual(name, name2)
++
++        # Both files should exist
++        self.assertTrue(self.storage.exists(name))
++        self.assertTrue(self.storage.exists(name2))
++
++        # Verify contents
++        with self.storage.open(name, "rb") as f:
++            self.assertEqual(f.read(), b"original content")
++        with self.storage.open(name2, "rb") as f:
++            self.assertEqual(f.read(), b"new content")
++
++    def test_directory_operations(self):
++        """Test operations with directories"""
++        content = ContentFile(b"nested content")
++
++        # Create file in nested directory
++        name = self.storage._save("dir1/dir2/test.txt", content)
++
++        # Verify file exists
++        self.assertTrue(self.storage.exists(name))
++
++        # Verify directories were created
++        dir_path = os.path.join(self.temp_dir, "dir1", "dir2")
++        self.assertTrue(os.path.exists(dir_path))
++
++        # Test directory listing
++        files = self.storage.listdir("dir1")[1]  # [1] gets files, [0] gets dirs
++        self.assertIn("dir2/test.txt", files)
++
++        # Delete file
++        self.storage.delete(name)
++        self.assertFalse(self.storage.exists(name))
++
++    def test_file_modes(self):
++        """Test file operations with different modes"""
++        # Test binary write
++        with self.storage.open("test.bin", "wb") as f:
++            f.write(b"binary content")
++
++        # Test binary read
++        with self.storage.open("test.bin", "rb") as f:
++            self.assertEqual(f.read(), b"binary content")
++
++        # Test text write
++        with self.storage.open("test.txt", "w") as f:
++            f.write("text content")
++
++        # Test text read
++        with self.storage.open("test.txt", "r") as f:
++            self.assertEqual(f.read(), "text content")
++
++    def test_error_conditions(self):
++        """Test various error conditions"""
++        # Test opening non-existent file
++        with self.assertRaises(FileNotFoundError):
++            self.storage.open("nonexistent.txt", "r")
++
++        # Test invalid path
++        with self.assertRaises(SuspiciousOperation):
++            self.storage.exists("../outside.txt")
++
++        # Test delete non-existent file (should not raise error)
++        self.storage.delete("nonexistent.txt")
++
++        # Test invalid mode
++        with self.assertRaises(ValueError):
++            self.storage.open("test.txt", "invalid_mode")
+diff --git a/pyproject.toml b/pyproject.toml
+index aa7a6ed78d..0718755b66 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -151,6 +151,7 @@ webauthn = "*"
+ wsproto = "*"
+ xmlsec = "*"
+ zxcvbn = "*"
++pillow = "*"
+ 
+ [tool.poetry.dev-dependencies]
+ aws-cdk-lib = "*"
+diff --git a/web/src/admin/applications/ApplicationForm.ts b/web/src/admin/applications/ApplicationForm.ts
+index 1770d3dae6..c00f6a62a7 100644
+--- a/web/src/admin/applications/ApplicationForm.ts
++++ b/web/src/admin/applications/ApplicationForm.ts
+@@ -1,6 +1,7 @@
+ import "@goauthentik/admin/applications/ProviderSelectModal";
+ import { iconHelperText } from "@goauthentik/admin/helperText";
+ import { DEFAULT_CONFIG } from "@goauthentik/common/api/config";
++import { MessageLevel } from "@goauthentik/common/messages";
+ import { first } from "@goauthentik/common/utils";
+ import "@goauthentik/components/ak-file-input";
+ import "@goauthentik/components/ak-radio-input";
+@@ -18,6 +19,7 @@ import { ModelForm } from "@goauthentik/elements/forms/ModelForm";
+ import "@goauthentik/elements/forms/ProxyForm";
+ import "@goauthentik/elements/forms/Radio";
+ import "@goauthentik/elements/forms/SearchSelect";
++import { showMessage } from "@goauthentik/elements/messages/MessageContainer";
+ import "@patternfly/elements/pf-tooltip/pf-tooltip.js";
+ 
+ import { msg } from "@lit/localize";
+@@ -79,20 +81,59 @@ export class ApplicationForm extends WithCapabilitiesConfig(ModelForm<Applicatio
+         }
+         if (this.can(CapabilitiesEnum.CanSaveMedia)) {
+             const icon = this.getFormFiles()["metaIcon"];
+-            if (icon || this.clearIcon) {
+-                await new CoreApi(DEFAULT_CONFIG).coreApplicationsSetIconCreate({
+-                    slug: app.slug,
+-                    file: icon,
+-                    clear: this.clearIcon,
+-                });
++            if (this.clearIcon) {
++                try {
++                    await new CoreApi(DEFAULT_CONFIG).coreApplicationsSetIconCreate({
++                        slug: app.slug,
++                        clear: true,
++                    });
++                } catch (e: any) {
++                    showMessage({
++                        level: MessageLevel.error,
++                        message: e.response?.data?.error || "Failed to clear icon",
++                    });
++                }
++            } else if (icon) {
++                try {
++                    await new CoreApi(DEFAULT_CONFIG).coreApplicationsSetIconCreate({
++                        slug: app.slug,
++                        file: icon,
++                    });
++                } catch (e: any) {
++                    showMessage({
++                        level: MessageLevel.error,
++                        message: e.response?.data?.error || "Failed to upload icon",
++                    });
++                }
+             }
+         } else {
+-            await new CoreApi(DEFAULT_CONFIG).coreApplicationsSetIconUrlCreate({
+-                slug: app.slug,
+-                filePathRequest: {
+-                    url: data.metaIcon || "",
+-                },
+-            });
++            if (this.clearIcon) {
++                try {
++                    await new CoreApi(DEFAULT_CONFIG).coreApplicationsSetIconCreate({
++                        slug: app.slug,
++                        clear: true,
++                    });
++                } catch (e: any) {
++                    showMessage({
++                        level: MessageLevel.error,
++                        message: e.response?.data?.error || "Failed to clear icon",
++                    });
++                }
++            } else if (data.metaIcon) {
++                try {
++                    await new CoreApi(DEFAULT_CONFIG).coreApplicationsSetIconUrlCreate({
++                        slug: app.slug,
++                        filePathRequest: {
++                            url: data.metaIcon,
++                        },
++                    });
++                } catch (e: any) {
++                    showMessage({
++                        level: MessageLevel.error,
++                        message: e.response?.data?.error || "Failed to set icon URL",
++                    });
++                }
++            }
+         }
+         return app;
+     }
+@@ -112,11 +153,8 @@ export class ApplicationForm extends WithCapabilitiesConfig(ModelForm<Applicatio
+     }
+ 
+     handleClearIcon(ev: Event) {
+-        ev.stopPropagation();
+-        if (!(ev instanceof InputEvent) || !ev.target) {
+-            return;
+-        }
+-        this.clearIcon = !!(ev.target as HTMLInputElement).checked;
++        const target = ev.target as HTMLInputElement;
++        this.clearIcon = target.checked;
+     }
+ 
+     renderForm(): TemplateResult {
+diff --git a/web/src/admin/applications/wizard/steps/ak-application-wizard-submit-step.ts b/web/src/admin/applications/wizard/steps/ak-application-wizard-submit-step.ts
+index b02f49d1d7..85b648c0c2 100644
+--- a/web/src/admin/applications/wizard/steps/ak-application-wizard-submit-step.ts
++++ b/web/src/admin/applications/wizard/steps/ak-application-wizard-submit-step.ts
+@@ -131,39 +131,39 @@ export class ApplicationWizardSubmitStep extends CustomEmitterElement(Applicatio
+ 
+         this.state = "running";
+ 
+-        return (
+-            new CoreApi(DEFAULT_CONFIG)
+-                .coreTransactionalApplicationsUpdate({
+-                    transactionApplicationRequest: request,
+-                })
+-                .then((_response: TransactionApplicationResponse) => {
+-                    this.dispatchCustomEvent(EVENT_REFRESH);
+-                    this.state = "submitted";
+-                })
+-
+-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+-                .catch(async (resolution: any) => {
+-                    const errors = (await parseAPIError(
+-                        await resolution,
+-                    )) as ExtendedValidationError;
+-
+-                    // THIS is a really gross special case; if the user is duplicating the name of
+-                    // an existing provider, the error appears on the `app` (!) error object. We
+-                    // have to move that to the `provider.name` error field so it shows up in the
+-                    // right place.
+-                    if (Array.isArray(errors?.app?.provider)) {
+-                        const providerError = errors.app.provider;
+-                        errors.provider = errors.provider ?? {};
+-                        errors.provider.name = providerError;
+-                        delete errors.app.provider;
+-                        if (Object.keys(errors.app).length === 0) {
+-                            delete errors.app;
+-                        }
+-                    }
+-                    this.handleUpdate({ errors });
+-                    this.state = "reviewing";
+-                })
+-        );
++        try {
++            const response = await new CoreApi(DEFAULT_CONFIG).coreTransactionalApplicationsUpdate({
++                transactionApplicationRequest: request,
++            });
++            this.dispatchCustomEvent(EVENT_REFRESH);
++            this.state = "submitted";
++            return response;
++        } catch (error: any) {
++            const errors = (await parseAPIError(error)) as ExtendedValidationError;
++
++            // Handle file upload errors
++            if (error.response?.data?.error) {
++                errors.provider = errors.provider || {};
++                errors.provider.icon = [error.response.data.error];
++            }
++
++            // THIS is a really gross special case; if the user is duplicating the name of
++            // an existing provider, the error appears on the `app` (!) error object. We
++            // have to move that to the `provider.name` error field so it shows up in the
++            // right place.
++            if (Array.isArray(errors?.app?.provider)) {
++                const providerError = errors.app.provider;
++                errors.provider = errors.provider ?? {};
++                errors.provider.name = providerError;
++                delete errors.app.provider;
++                if (Object.keys(errors.app).length === 0) {
++                    delete errors.app;
++                }
++            }
++            this.handleUpdate({ errors });
++            this.state = "reviewing";
++            throw error;
++        }
+     }
+ 
+     override handleButton(button: WizardButton) {
+@@ -249,7 +249,12 @@ export class ApplicationWizardSubmitStep extends CustomEmitterElement(Applicatio
+                         html`<p>${msg("There was an error in the provider.")}</p>
+                             <p>
+                                 <a @click=${navTo("provider")}>${msg("Review the provider.")}</a>
+-                            </p>`,
++                            </p>
++                            ${errors.provider?.icon
++                                ? html`<p class="pf-c-form__helper-text pf-m-error">
++                                      ${errors.provider.icon.join(", ")}
++                                  </p>`
++                                : nothing}`,
+                 )
+                 .with(
+                     { detail: P.nonNullable },
+@@ -269,14 +274,7 @@ export class ApplicationWizardSubmitStep extends CustomEmitterElement(Applicatio
+                             </ul>
+                             <p>${msg("Please go back and review the application.")}</p>`,
+                 )
+-                .otherwise(
+-                    () =>
+-                        html`<p>
+-                            ${msg(
+-                                "There was an error creating the application, but no error message was sent. Please review the server logs.",
+-                            )}
+-                        </p>`,
+-                )}`;
++                .otherwise(() => nothing)}`;
+     }
+ 
+     renderReview(app: Partial<ApplicationRequest>, provider: OneOfProvider) {
+-- 
+2.47.2
+

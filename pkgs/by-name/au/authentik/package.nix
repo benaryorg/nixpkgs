@@ -17,11 +17,25 @@
 let
   version = "2024.12.1";
 
-  src = fetchFromGitHub {
+  ghSrc = fetchFromGitHub {
     owner = "goauthentik";
     repo = "authentik";
     rev = "version/${version}";
     hash = "sha256-CkUmsVKzAQ/VWIhtxWxlcGtrWVa8hxqsMqvfcsG5ktA=";
+  };
+
+  # needed to inject patches into the srcs which will be used with `sourceRoot`
+  src = stdenvNoCC.mkDerivation {
+    name = "source";
+    src = ghSrc;
+    patches = [
+      # PR which fixes custom urls rebased onto 2024.12.1 (had merge conflicts)
+      ./pr-13406.patch
+    ];
+    buildPhase = ''
+      cd ..
+      mv source $out
+    '';
   };
 
   meta = with lib; {
@@ -266,6 +280,7 @@ let
             opencontainers
             packaging
             paramiko
+            pillow
             psycopg
             pydantic
             pydantic-scim

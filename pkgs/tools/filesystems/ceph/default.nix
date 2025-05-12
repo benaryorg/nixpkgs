@@ -368,9 +368,17 @@ rec {
     inherit src version;
 
     patches = [
+      # arrow-cpp 20.0.0 compat
       (fetchpatch2 {
-        name = "ceph-s3select-arrow-18-compat.patch";
-        url = "https://github.com/ceph/s3select/commit/f333ec82e6e8a3f7eb9ba1041d1442b2c7cd0f05.patch";
+        name = "Refactor-crypto-integration-with-arrow.patch";
+        url = "https://github.com/ceph/s3select/commit/8da50fe3138e72831efd935d0d41c329974ce760.patch";
+        hash = "sha256-RBNBZW8esbauDXM92y/pZOjDJCcvUkAeE+G8OJj84G0=";
+        stripLen = 1;
+        extraPrefix = "src/s3select/";
+      })
+      (fetchpatch2 {
+        name = "s3select-remove-compilation-warnings.patch";
+        url = "https://github.com/ceph/s3select/commit/95d2b17403c3dafc5f76e36ba694eec86c3b23e8.patch";
         hash = "sha256-21fi5tMIs/JmuhwPYMWtampv/aqAe+EoPAXZLJlOvgo=";
         stripLen = 1;
         extraPrefix = "src/s3select/";

@@ -95,6 +95,7 @@ let
 
   stage1Units = generateUnits {
     type = "initrd";
+    verify = cfg.verifyDefaultTarget;
     units = enabledUnits;
     upstreamUnits = enabledUpstreamUnits;
     inherit upstreamWants;
@@ -157,6 +158,16 @@ in
         stage 2 counterparts such as {option}`systemd.services`,
         except that `restartTriggers` and `reloadTriggers` are not
         supported.
+      '';
+    };
+
+    verifyDefaultTarget = lib.mkOption {
+      type = lib.types.bool;
+      default = config.systemd.verifyDefaultTarget;
+      defaultText = lib.literalExpression "config.systemd.verifyDefaultTarget";
+      description = ''
+        Whether to run `systemd-analyze verify` on *default.target*.
+        Enabling this will fail the build if the default target contains circular dependencies or similar errors.
       '';
     };
 

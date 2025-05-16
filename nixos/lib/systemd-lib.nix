@@ -59,6 +59,7 @@ let
   cfg = config.systemd;
   lndir = "${pkgs.buildPackages.xorg.lndir}/bin/lndir";
   systemd = cfg.package;
+  patchedSystemd = systemd.overrideAttrs ({ patches, ... }: { patches = patches ++ [ ./systemd-analyze-sandbox.patch ]; });
 in
 rec {
 
@@ -352,6 +353,8 @@ rec {
   generateUnits =
     {
       allowCollisions ? true,
+      # this requires namespacing to work in the build environment!
+      verify ? false,
       type,
       units,
       upstreamUnits,
@@ -530,6 +533,22 @@ rec {
           ln -s ../autovt@tty1.service $out/getty.target.wants/
 
           ln -s ../remote-fs.target $out/multi-user.target.wants/
+
+          ${optionalString verify ''
+            # there are errors if systemd-analyze does not produce output
+            # this includes dependency cycle information (Job $job/start deleted to break ordering cycle starting with $y/start)
+            ${patchedSystemd}/bin/systemd-analyze verify \
+                --no-pager --man=no --recursive-errors=yes \
+                $out/default.target \
+              2>&1 \
+              | if grep ^.; then
+                printf '%s\n' "" \
+                  'Failed to verify systemd configuration.' \
+                  'You can disable this check using `systemd.verifyDefaultTarget`.' \
+                  >&2
+                exit 1
+              fi
+          ''}
         ''}
       ''; # */
 
